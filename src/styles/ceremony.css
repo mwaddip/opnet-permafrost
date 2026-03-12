@@ -338,3 +338,252 @@
   font-size: 13px;
   margin-bottom: 6px;
 }
+
+/* ── ThresholdSign component styles (from cabal admin.css) ── */
+
+/* Step inputs + button */
+.step-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.step-field label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-light);
+}
+
+.step-field input {
+  width: 100%;
+  font-size: 14px;
+  padding: 8px 12px;
+}
+
+.step-execute-btn {
+  width: 100%;
+  padding: 12px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 500;
+  background: var(--accent);
+  color: #F5F7FA;
+  transition: background 0.15s ease-out;
+}
+
+.step-execute-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.step-execute-btn:disabled {
+  background: var(--bg-surface);
+  color: var(--gray);
+  cursor: not-allowed;
+}
+
+/* Step status message */
+.step-status {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  text-align: center;
+}
+
+.step-status.simulating,
+.step-status.awaiting_approval,
+.step-status.broadcasting {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.step-status.confirmed {
+  background: rgba(46, 204, 113, 0.08);
+  color: var(--green);
+  border: 1px solid rgba(46, 204, 113, 0.2);
+}
+
+.step-status.error {
+  background: rgba(231, 76, 60, 0.08);
+  color: var(--red);
+  border: 1px solid rgba(231, 76, 60, 0.2);
+  word-break: break-word;
+  cursor: pointer;
+}
+
+/* Protocol status grid */
+.admin-detail-grid {
+  background: var(--bg-card);
+  border: 1px solid rgba(237, 239, 242, 0.06);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.admin-detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(237, 239, 242, 0.06);
+}
+
+.admin-detail-row:last-child {
+  border-bottom: none;
+}
+
+.admin-detail-label {
+  color: var(--gray-light);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.admin-detail-value {
+  font-weight: 500;
+  color: var(--white);
+}
+
+.admin-detail-value.truncate {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+/* Threshold signing */
+.threshold-share-import,
+.threshold-sign {
+  background: var(--bg-card);
+  border: 1px solid rgba(237, 239, 242, 0.06);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.threshold-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-light);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+}
+
+.threshold-hint {
+  font-size: 13px;
+  color: var(--gray-light);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.threshold-filename {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.threshold-blob-textarea {
+  width: 100%;
+  min-height: 64px;
+  font-size: 12px;
+  font-family: monospace;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border: 1px solid rgba(237, 239, 242, 0.1);
+  border-radius: var(--radius);
+  color: var(--white);
+  resize: vertical;
+}
+
+.threshold-blob-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.threshold-btn-row {
+  display: flex;
+  gap: 12px;
+}
+
+.threshold-btn-half {
+  flex: 1;
+}
+
+.threshold-btn-cancel {
+  background: var(--bg-surface);
+  color: var(--gray-light);
+}
+
+.threshold-btn-cancel:hover:not(:disabled) {
+  background: rgba(237, 239, 242, 0.1);
+}
+
+.threshold-collected {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.threshold-collected-chip {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 10px;
+  border-radius: 6px;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.threshold-tx-detail {
+  margin-bottom: 20px;
+}
+
+.threshold-idle {
+  margin-top: 16px;
+}
+
+.threshold-complete {
+  margin-top: 16px;
+}
+
+.threshold-share-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.threshold-share-badge {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 14px;
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.threshold-clear-btn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  color: var(--gray-light);
+  cursor: pointer;
+}
+
+.threshold-clear-btn:hover {
+  background: rgba(237, 239, 242, 0.1);
+}
+
+.threshold-mode-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--accent-dim);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: var(--radius-lg);
+  padding: 16px 24px;
+  margin-bottom: 24px;
+  font-size: 14px;
+  color: var(--accent);
+}
