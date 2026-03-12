@@ -1,0 +1,7 @@
+node_modules
+dist
+dist-offline
+backend/node_modules
+backend/dist
+*.tsbuildinfo
+.git
