@@ -4,6 +4,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ConfigStore } from './lib/config-store.js';
 import { configRoutes } from './routes/config.js';
+import { walletRoutes } from './routes/wallet.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || '8080', 10);
@@ -19,6 +20,7 @@ try { store.load(); } catch { /* not initialized or encrypted — that's fine */
 
 // API routes
 app.use('/api', configRoutes(store));
+app.use('/api/wallet', walletRoutes(store));
 
 // Proxy WebSocket to relay
 app.use(
