@@ -1,8 +1,8 @@
-# PERMAFROST
+# PERMAFROST Vault
 
-Threshold ML-DSA key generation ceremony for [OPNet](https://opnet.org) multisig wallets.
+Post-quantum multisig operations toolkit for [OPNet](https://opnet.org) Bitcoin L1 smart contracts.
 
-PERMAFROST runs a distributed key generation (DKG) protocol so that **T-of-N parties** each produce their own secret share of an ML-DSA (post-quantum) signing key — without any single party ever seeing the full secret. The shares are encrypted, downloaded, and used later for threshold signing operations.
+PERMAFROST Vault is a self-hosted Docker container that combines DKG key generation, threshold ML-DSA signing, wallet management, and OPNet transaction broadcasting into a single operational interface. It runs a distributed key generation (DKG) protocol so that **T-of-N parties** each produce their own secret share of an ML-DSA (post-quantum) signing key — without any single party ever seeing the full secret.
 
 ## How it works
 
@@ -19,10 +19,19 @@ Blob exchange can happen in two ways:
 ## Repository structure
 
 ```
-├── src/                  # React ceremony app
-│   ├── components/       # DKGWizard, PasswordModal
-│   ├── lib/              # DKG protocol, relay client, crypto helpers
+├── src/                  # React frontend (Vite)
+│   ├── components/       # DKGWizard, InstallWizard, WalletSetup,
+│   │                     # SigningPage, MessageBuilder, ThresholdSign,
+│   │                     # ShareGate, Settings, PasswordModal
+│   ├── lib/              # DKG protocol, threshold signing, relay client,
+│   │                     # API client, crypto helpers, vault types
 │   └── styles/           # CSS (dark theme, neutral blue accent)
+├── backend/              # Node.js/Express backend
+│   └── src/
+│       ├── lib/          # ConfigStore, encryption, OPNet client,
+│       │                 # ThresholdMLDSASigner adapter
+│       ├── routes/       # API routes (config, wallet, tx, balances)
+│       └── server.ts     # Express entry point + WS proxy
 ├── relay/                # Go WebSocket relay server
 │   ├── main.go           # Entry point, CLI flags, env vars
 │   ├── hub.go            # Session management, WebSocket upgrade
@@ -30,7 +39,10 @@ Blob exchange can happen in two ways:
 │   ├── limits.go         # Rate limiting (per-IP, max sessions)
 │   ├── Dockerfile        # Minimal scratch-based container
 │   └── *_test.go         # Integration tests
-└── vendor/post-quantum/  # @btc-vision/post-quantum (threshold ML-DSA)
+├── vendor/post-quantum/  # @btc-vision/post-quantum (threshold ML-DSA)
+├── Dockerfile            # Multi-stage build (frontend + backend + relay)
+├── docker-compose.yml    # Single-container deployment
+└── entrypoint.sh         # Container startup (relay + backend)
 ```
 
 ## Setup
@@ -163,6 +175,59 @@ services:
     ports:
       - "8080:8080"
 ```
+
+## Vault — Docker Deployment
+
+The Vault packages the frontend, backend, and relay into a single Docker container.
+
+### Quick start
+
+```bash
+docker compose up -d
+# Open http://localhost:8080
+```
+
+The install wizard will guide you through network selection, storage mode, wallet generation, and the DKG ceremony.
+
+### Build from source
+
+```bash
+docker build -t permafrost-vault .
+docker run -d -p 8080:8080 -v permafrost-data:/data permafrost-vault
+```
+
+### Storage modes
+
+| Mode | Description |
+|---|---|
+| **Persistent** | Config stored as plaintext JSON at `/data/config.json`. Fast access for trusted environments. |
+| **Encrypted Persistent** | Config encrypted with AES-256-GCM on disk. Password required on each container restart. |
+| **Encrypted Portable** | Config file downloaded to your machine. Upload + password each session. Nothing persisted on server. |
+
+### Backend environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `8080` | HTTP listen port |
+| `RELAY_PORT` | `8081` | Internal relay WebSocket port |
+| `DATA_DIR` | `/data` | Persistent data directory |
+
+## Vault — Development Setup
+
+Run three processes in separate terminals:
+
+```bash
+# Terminal 1: Frontend (Vite dev server on :5173)
+npm run dev
+
+# Terminal 2: Backend (Express on :8080, auto-reload)
+npm run dev:backend
+
+# Terminal 3: Relay (Go on :8081, optional — needed for relay mode)
+npm run dev:relay
+```
+
+The Vite dev server proxies `/api` and `/ws` to the backend on port 8080.
 
 ## Security
 
