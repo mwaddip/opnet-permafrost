@@ -1,0 +1,59 @@
+:root {
+  --bg:          #0F1113;
+  --bg-raised:   #151719;
+  --bg-surface:  #1B1D20;
+  --bg-card:     #1B1D20;
+  --accent:      #3B82F6;
+  --accent-hover: #2563EB;
+  --accent-dim:  rgba(59, 130, 246, 0.12);
+  --accent-tint: rgba(59, 130, 246, 0.08);
+  --white:       #EDEFF2;
+  --white-dim:   rgba(237, 239, 242, 0.6);
+  --gray:        #6B6B6B;
+  --gray-light:  #AEB4BC;
+  --red:         #E74C3C;
+  --green:       #2ECC71;
+  --font:        'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --radius:      8px;
+  --radius-lg:   12px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg);
+  color: var(--white);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: var(--font);
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  outline: none;
+}
+
+input, select {
+  font-family: var(--font);
+  background: var(--bg-raised);
+  color: var(--white);
+  border: 1px solid rgba(237, 239, 242, 0.1);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 16px;
+  outline: none;
+  transition: border-color 0.15s ease-out;
+}
+
+input:focus, select:focus {
+  border-color: var(--accent);
+}
+
+input::placeholder {
+  color: var(--gray);
+}
