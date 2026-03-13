@@ -32,8 +32,8 @@ export function OtziLogo({ size = 32, className }: { size?: number; className?: 
       <polygon points="90,84 97,91 97,147 90,154 83,147 83,91" />
       <polygon points="166,84 173,91 173,147 166,154 159,147 159,91" />
       <polygon points="96,178 104,172 152,172 160,178 152,184 104,184" />
-      <polygon points="96,160 104,168 96,176 88,168" />
-      <polygon points="160,160 168,168 160,176 152,168" />
+      <polygon points="96,155 104,163 96,171 88,163" />
+      <polygon points="160,155 168,163 160,171 152,163" />
       <g opacity="0.9">
         <rect x="108" y="48" width="16" height="12" />
         <rect x="132" y="48" width="16" height="12" />
@@ -64,8 +64,8 @@ export function OtziWordmark({ height = 40, className }: { height?: number; clas
       <polygon points="18,44 25,51 25,107 18,114 11,107 11,51" />
       <polygon points="94,44 101,51 101,107 94,114 87,107 87,51" />
       <polygon points="24,138 32,132 80,132 88,138 80,144 32,144" />
-      <polygon points="24,120 32,128 24,136 16,128" />
-      <polygon points="88,120 96,128 88,136 80,128" />
+      <polygon points="24,115 32,123 24,131 16,123" />
+      <polygon points="88,115 96,123 88,131 80,123" />
       {/* t: split verticals + left-half crossbar + bottom */}
       <polygon points="120,52 127,59 127,79 120,86 113,79 113,59" />
       <polygon points="120,98 127,105 127,125 120,132 113,125 113,105" />

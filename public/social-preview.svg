@@ -14,9 +14,9 @@
     <!-- Bottom horizontal -->
     <polygon points="96,178 104,172 152,172 160,178 152,184 104,184"/>
     <!-- Bottom-left corner joint -->
-    <polygon points="96,160 104,168 96,176 88,168"/>
+    <polygon points="96,155 104,163 96,171 88,163"/>
     <!-- Bottom-right corner joint -->
-    <polygon points="160,160 168,168 160,176 152,168"/>
+    <polygon points="160,155 168,163 160,171 152,163"/>
   </g>
   <!-- "Ötzi" text below logo -->
   <text x="640" y="530" text-anchor="middle" font-family="'JetBrains Mono', 'Fira Code', 'Consolas', monospace" font-size="36" fill="#F5F7FA" letter-spacing="0.15em">PERMAFROST VAULT</text>

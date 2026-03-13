@@ -22,9 +22,9 @@
   <!-- Bottom horizontal (hex) -->
   <polygon points="24,138 32,132 80,132 88,138 80,144 32,144"/>
   <!-- Lower-left diamond -->
-  <polygon points="24,120 32,128 24,136 16,128"/>
+  <polygon points="24,115 32,123 24,131 16,123"/>
   <!-- Lower-right diamond -->
-  <polygon points="88,120 96,128 88,136 80,128"/>
+  <polygon points="88,115 96,123 88,131 80,123"/>
 
 
   <!-- ═══ t (split verticals + left-half crossbar) ═══ -->
