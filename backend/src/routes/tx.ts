@@ -9,6 +9,19 @@ import { ThresholdMLDSASigner } from '../lib/threshold-signer.js';
 export function txRoutes(store: ConfigStore): Router {
   const r = Router();
 
+  // Broadcast lock: messageHash → result (prevents double-broadcast)
+  const broadcastResults = new Map<string, { transactionId?: string; estimatedFees?: string; error?: string }>();
+
+  /** GET /api/tx/broadcast-status/:messageHash — check if already broadcast */
+  r.get('/broadcast-status/:messageHash', (req: Request, res: Response) => {
+    const cached = broadcastResults.get(req.params.messageHash!);
+    if (cached) {
+      res.json({ broadcast: true, ...cached });
+    } else {
+      res.json({ broadcast: false });
+    }
+  });
+
   /** POST /api/tx/encode — encode calldata from method + params */
   r.post('/encode', async (req: Request, res: Response) => {
     const { method, params, paramTypes } = req.body as {
@@ -100,7 +113,7 @@ export function txRoutes(store: ConfigStore): Router {
 
   /** POST /api/tx/broadcast — build tx with ML-DSA sig and broadcast */
   r.post('/broadcast', async (req: Request, res: Response) => {
-    const { contract: contractAddr, method, params: rawParams, paramTypes, abi, signature } = req.body as {
+    const { contract: contractAddr, method, params: rawParams, paramTypes, abi, signature, messageHash } = req.body as {
       contract: string;
       method: string;
       params: unknown[];
@@ -109,6 +122,17 @@ export function txRoutes(store: ConfigStore): Router {
       signature: string;
       messageHash?: string;
     };
+
+    // Prevent double-broadcast
+    if (messageHash) {
+      const cached = broadcastResults.get(messageHash);
+      if (cached) {
+        res.json({ success: !!cached.transactionId, alreadyBroadcast: true, ...cached });
+        return;
+      }
+      // Lock immediately to block concurrent requests
+      broadcastResults.set(messageHash, {});
+    }
 
     // Convert params to proper types expected by OPNet SDK
     const params = (rawParams ?? []).map((val, i) => {
@@ -181,13 +205,18 @@ export function txRoutes(store: ConfigStore): Router {
       mnemonic.zeroize();
       wallet.zeroize();
 
-      res.json({
-        success: true,
+      const result = {
         transactionId: receipt.transactionId,
         estimatedFees: receipt.estimatedFees?.toString(),
-      });
+      };
+      if (messageHash) broadcastResults.set(messageHash, result);
+
+      res.json({ success: true, ...result });
     } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+      const errResult = { error: (e as Error).message };
+      // On error, clear the lock so it can be retried
+      if (messageHash) broadcastResults.delete(messageHash);
+      res.status(500).json(errResult);
     }
   });
 

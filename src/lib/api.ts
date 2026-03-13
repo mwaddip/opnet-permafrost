@@ -110,6 +110,9 @@ export const simulateTx = (contract: string, method: string, params: unknown[], 
     body: JSON.stringify({ contract, method, params, abi }),
   });
 
+export const getBroadcastStatus = (messageHash: string) =>
+  json<{ broadcast: boolean; transactionId?: string; estimatedFees?: string; error?: string }>(`/tx/broadcast-status/${messageHash}`);
+
 export const broadcastTx = (data: {
   contract: string;
   method: string;

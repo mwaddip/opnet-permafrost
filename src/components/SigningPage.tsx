@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { MessageBuilder, type MessageMeta } from './MessageBuilder';
 import { ShareImport, ThresholdSign } from './ThresholdSign';
 import { RelayClient } from '../lib/relay';
-import { getConfig, getWalletBalance, broadcastTx } from '../lib/api';
+import { getConfig, getWalletBalance, broadcastTx, getBroadcastStatus } from '../lib/api';
 import { toHex } from '../lib/threshold';
 import type { VaultConfig } from '../lib/vault-types';
 import type { DecryptedShare } from '../lib/share-crypto';
@@ -28,7 +28,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed }: Props) {
   const [message, setMessage] = useState<Uint8Array | null>(null);
   const [messageMeta, setMessageMeta] = useState<MessageMeta | null>(null);
   const [signature, setSignature] = useState<string | null>(null);
-  const [txResult, setTxResult] = useState<{ transactionId?: string; error?: string } | null>(null);
+  const [txResult, setTxResult] = useState<{ transactionId?: string; error?: string; alreadyBroadcast?: boolean } | null>(null);
   const [broadcasting, setBroadcasting] = useState(false);
 
   // Role: did this party build the message (initiator) or join with a code (joiner)?
@@ -129,6 +129,16 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed }: Props) {
     setPhase('result');
   }, []);
 
+  // Check if another party already broadcast this tx
+  useEffect(() => {
+    if (phase !== 'result' || !messageMeta?.messageHash || txResult) return;
+    getBroadcastStatus(messageMeta.messageHash).then(status => {
+      if (status.broadcast && status.transactionId) {
+        setTxResult({ transactionId: status.transactionId, alreadyBroadcast: true });
+      }
+    }).catch(() => {});
+  }, [phase, messageMeta, txResult]);
+
   const handleBroadcast = async () => {
     if (!messageMeta || !signature) return;
     setBroadcasting(true);
@@ -140,7 +150,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed }: Props) {
         paramTypes: messageMeta.paramTypes,
         signature,
         messageHash: messageMeta.messageHash,
-      });
+      }) as { transactionId?: string; error?: string; alreadyBroadcast?: boolean };
       setTxResult(result);
     } catch (e) {
       setTxResult({ error: (e as Error).message });
@@ -507,7 +517,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed }: Props) {
           {txResult && (
             <div className={txResult.transactionId ? 'success-box' : 'warning'}>
               {txResult.transactionId
-                ? `Transaction broadcast: ${txResult.transactionId}`
+                ? `${txResult.alreadyBroadcast ? 'Already broadcast by another party' : 'Transaction broadcast'}: ${txResult.transactionId}`
                 : `Broadcast failed: ${txResult.error}`}
             </div>
           )}
