@@ -5,3 +5,4 @@ dist-offline
 .worktrees
 data/
 backend/data/
+docs/superpowers/

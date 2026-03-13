@@ -2,7 +2,7 @@
 
 Post-quantum multisig vault for [OPNet](https://opnet.org) Bitcoin L1 smart contracts.
 
-PERMAFROST Vault is a self-hosted Docker container that combines distributed key generation (DKG), threshold ML-DSA signing, wallet management, and OPNet transaction broadcasting into a single interface. T-of-N parties each produce their own secret share of an ML-DSA (post-quantum) signing key — without any single party ever seeing the full secret.
+PERMAFROST Vault is a self-hosted application that combines distributed key generation (DKG), threshold ML-DSA signing, wallet management, and OPNet transaction broadcasting into a single interface. T-of-N parties each produce their own secret share of an ML-DSA (post-quantum) signing key — without any single party ever seeing the full secret.
 
 ## How it works
 
@@ -27,28 +27,57 @@ Both DKG and signing support two modes:
 - **Relay mode** — an encrypted WebSocket relay routes E2E encrypted messages between parties in real time. The relay is built into the container.
 - **Offline mode** — parties manually copy/paste blobs (air-gapped friendly).
 
-## Docker deployment
+## Install
 
-### Quick start
+### Linux (one command)
 
 ```bash
-docker compose up -d
+curl -sL https://github.com/mwaddip/otzi/releases/latest/download/install.sh | sudo bash
 ```
 
-Open **http://localhost** — the install wizard guides you through network selection, storage mode, wallet generation, and the DKG ceremony.
+Downloads the latest release, installs to `/opt/permafrost`, creates systemd
+services, and configures nginx or apache if detected.
+
+### Docker
+
+```bash
+docker run -d -p 80:80 -p 443:443 -v permafrost-data:/data ghcr.io/mwaddip/otzi:latest
+```
+
+Or with Docker Compose:
+
+```bash
+git clone https://github.com/mwaddip/otzi && cd otzi && docker compose up -d
+```
 
 ### Build from source
 
 ```bash
-docker build -t permafrost-vault .
-docker run -d \
-  -p 80:80 \
-  -p 443:443 \
-  -v permafrost-data:/data \
-  permafrost-vault
+git clone https://github.com/mwaddip/otzi && cd otzi
+sudo ./install.sh --deps     # install Node 20 + Go 1.23
+sudo ./install.sh --build    # build and install as systemd services
 ```
 
-### Ports
+### Windows
+
+Download the [latest release](https://github.com/mwaddip/otzi/releases/latest)
+zip, extract, and run `start.bat`. Requires [Node.js](https://nodejs.org/) in
+your PATH. Open http://localhost:8080 in your browser.
+
+### Installer options
+
+| Command | Description |
+|---------|-------------|
+| `sudo ./install.sh` | Download latest release and install |
+| `sudo ./install.sh --build` | Build from source and install |
+| `sudo ./install.sh --deps` | Install build dependencies (Node 20, Go 1.23) |
+| `sudo ./install.sh --uninstall` | Stop services, remove files |
+| `sudo ./install.sh --yes` | Skip confirmation prompts |
+
+<details>
+<summary>Docker details</summary>
+
+#### Ports
 
 | Port | Service | Description |
 |------|---------|-------------|
@@ -56,9 +85,10 @@ docker run -d \
 | **443** | Caddy | HTTPS — active when a domain is configured with Let's Encrypt |
 | **8080** | Backend | Direct access (bypasses Caddy) |
 
-### Custom domain and HTTPS
+#### Custom domain and HTTPS
 
-The container includes [Caddy](https://caddyserver.com/) as a reverse proxy with automatic Let's Encrypt HTTPS. Configure it from **Settings > Hosting** in the UI, or via the API:
+The Docker image includes [Caddy](https://caddyserver.com/) with automatic
+Let's Encrypt HTTPS. Configure from **Settings > Hosting** in the UI, or:
 
 ```bash
 curl -X POST http://localhost:8080/api/hosting \
@@ -66,17 +96,7 @@ curl -X POST http://localhost:8080/api/hosting \
   -d '{"domain": "vault.example.com", "httpsEnabled": true}'
 ```
 
-When HTTPS is enabled, Caddy automatically obtains and renews a TLS certificate. Ports 80 and 443 must be reachable from the internet for the ACME challenge.
-
-### Storage modes
-
-| Mode | Description |
-|------|-------------|
-| **Persistent** | Config stored as plaintext JSON at `/data/config.json`. For trusted environments. |
-| **Encrypted Persistent** | Config encrypted with AES-256-GCM on disk. Password required on each container restart. |
-| **Encrypted Portable** | Config downloaded to your machine. Upload + password each session. Nothing stored on the server. |
-
-### Environment variables
+#### Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -86,13 +106,24 @@ When HTTPS is enabled, Caddy automatically obtains and renews a TLS certificate.
 | `CADDYFILE_PATH` | `/etc/caddy/Caddyfile` | Caddy configuration file |
 | `XDG_DATA_HOME` | `/data/caddy` | Caddy certificate/data storage |
 
+</details>
+
+### Storage modes
+
+| Mode | Description |
+|------|-------------|
+| **Persistent** | Config stored as plaintext JSON. For trusted environments. |
+| **Encrypted Persistent** | Config encrypted with AES-256-GCM on disk. Password required on each restart. |
+| **Encrypted Portable** | Config downloaded to your machine. Upload + password each session. Nothing stored on the server. |
+
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  Docker container                               │
+│  PERMAFROST Vault                               │
 │                                                 │
-│  :80/:443  Caddy ──reverse proxy──> :8080       │
+│  :80/:443  Web server (nginx/apache/Caddy)      │
+│            └── reverse proxy ──> :8080          │
 │                                                 │
 │  :8080  Express backend                         │
 │         ├── /api/*    REST endpoints            │
@@ -101,7 +132,7 @@ When HTTPS is enabled, Caddy automatically obtains and renews a TLS certificate.
 │                                                 │
 │  :8081  Go relay (internal, not exposed)        │
 │                                                 │
-│  /data  Persistent volume                       │
+│  /var/lib/permafrost  (or /data in Docker)      │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -127,9 +158,11 @@ When HTTPS is enabled, Caddy automatically obtains and renews a TLS certificate.
 │   └── limits.go         # Rate limiting
 ├── vendor/post-quantum/  # @btc-vision/post-quantum 0.6.0-alpha.0
 ├── facts/                # Design by Contract interface inventory
-├── Dockerfile            # Multi-stage build
-├── docker-compose.yml    # Single-container deployment
-└── entrypoint.sh         # Container startup (relay + Caddy + backend)
+├── install.sh            # Universal Linux installer
+├── start.bat             # Windows launcher
+├── Dockerfile            # Multi-stage Docker build
+├── docker-compose.yml    # Docker Compose deployment
+└── entrypoint.sh         # Docker entrypoint (relay + Caddy + backend)
 ```
 
 ## Development
