@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { initInstance } from '../lib/api';
 import type { NetworkName, StorageMode } from '../lib/vault-types';
+import { OtziWordmark } from '../App';
 
 interface Props {
   onComplete: () => void;
@@ -38,8 +39,10 @@ export function InstallWizard({ onComplete }: Props) {
 
   return (
     <div className="ceremony">
-      <h1>PERMAFROST Vault</h1>
-      <p className="subtitle">First-time setup</p>
+      <div style={{ textAlign: 'center', marginBottom: 8 }}>
+        <OtziWordmark height={48} />
+      </div>
+      <p className="subtitle" style={{ textAlign: 'center' }}>First-time setup</p>
 
       <div className="steps">
         <div className={`step-dot ${step >= 1 ? 'active' : ''}`} />

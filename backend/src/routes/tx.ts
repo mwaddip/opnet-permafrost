@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { createHash } from 'node:crypto';
-import { BinaryWriter } from '@btc-vision/transaction';
+import { Address, BinaryWriter } from '@btc-vision/transaction';
 import { getContract, OP_20_ABI } from 'opnet';
 import { ConfigStore } from '../lib/config-store.js';
 import { getProvider, getNetwork, generateWallet } from '../lib/opnet-client.js';
@@ -53,10 +53,11 @@ export function txRoutes(store: ConfigStore): Router {
 
   /** POST /api/tx/simulate — simulate a contract call */
   r.post('/simulate', async (req: Request, res: Response) => {
-    const { contract: contractAddr, method, params, abi } = req.body as {
+    const { contract: contractAddr, method, params: rawParams, paramTypes, abi } = req.body as {
       contract: string;
       method: string;
       params: unknown[];
+      paramTypes?: Array<'address' | 'u256' | 'bytes'>;
       abi?: unknown;
     };
     try {
@@ -65,6 +66,15 @@ export function txRoutes(store: ConfigStore): Router {
       const network = getNetwork(config.network);
       const contractAbi = abi || OP_20_ABI;
 
+      // Convert params to proper types expected by OPNet SDK
+      const params = (rawParams ?? []).map((val, i) => {
+        const t = paramTypes?.[i];
+        const s = String(val);
+        if (t === 'address') return Address.wrap(Buffer.from(s.replace(/^0[xX]/, ''), 'hex'));
+        if (t === 'u256') return BigInt(s);
+        return val;
+      });
+
       const contract = getContract(contractAddr, contractAbi as never, provider, network);
       const fn = (contract as unknown as Record<string, unknown>)[method];
       if (typeof fn !== 'function') {
@@ -72,7 +82,7 @@ export function txRoutes(store: ConfigStore): Router {
         return;
       }
 
-      const result = await (fn as (...args: unknown[]) => Promise<{ revert?: string; estimatedGas?: bigint; events?: unknown[] }>).call(contract, ...(params ?? []));
+      const result = await (fn as (...args: unknown[]) => Promise<{ revert?: string; estimatedGas?: bigint; events?: unknown[] }>).call(contract, ...params);
       if (result.revert) {
         res.json({ success: false, revert: result.revert });
         return;
@@ -90,14 +100,24 @@ export function txRoutes(store: ConfigStore): Router {
 
   /** POST /api/tx/broadcast — build tx with ML-DSA sig and broadcast */
   r.post('/broadcast', async (req: Request, res: Response) => {
-    const { contract: contractAddr, method, params, abi, signature } = req.body as {
+    const { contract: contractAddr, method, params: rawParams, paramTypes, abi, signature } = req.body as {
       contract: string;
       method: string;
       params: unknown[];
+      paramTypes?: Array<'address' | 'u256' | 'bytes'>;
       abi?: unknown;
       signature: string;
       messageHash?: string;
     };
+
+    // Convert params to proper types expected by OPNet SDK
+    const params = (rawParams ?? []).map((val, i) => {
+      const t = paramTypes?.[i];
+      const s = String(val);
+      if (t === 'address') return Address.wrap(Buffer.from(s.replace(/^0[xX]/, ''), 'hex'));
+      if (t === 'u256') return BigInt(s);
+      return val;
+    });
     try {
       const config = store.get();
       if (!config.wallet) {
@@ -116,8 +136,12 @@ export function txRoutes(store: ConfigStore): Router {
       // Reconstruct wallet from mnemonic
       const { wallet, mnemonic } = generateWallet(config.wallet.mnemonic, config.network);
 
-      // Create contract with sender address
-      const contract = getContract(contractAddr, contractAbi as never, provider, network, wallet.address);
+      // Use the Permafrost vault address (DKG pubkey + tweaked pubkey) as sender
+      const vaultAddr = Address.fromString(
+        config.permafrost.combinedPubKey,
+        config.wallet.tweakedPubKey,
+      );
+      const contract = getContract(contractAddr, contractAbi as never, provider, network, vaultAddr);
       const fn = (contract as unknown as Record<string, unknown>)[method];
       if (typeof fn !== 'function') {
         mnemonic.zeroize();

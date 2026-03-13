@@ -1,27 +1,31 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { OP20_METHODS, type MethodDef } from '../lib/op20-methods';
 import { encodeTx } from '../lib/api';
 import type { ContractConfig } from '../lib/vault-types';
+import type { SendPrefill } from '../App';
 
-type InputMode = 'op20' | 'abi' | 'raw';
+type InputMode = 'configured' | 'op20' | 'abi' | 'raw';
 
 interface Props {
   contracts: ContractConfig[];
   onMessageBuilt: (message: Uint8Array, meta: MessageMeta) => void;
+  prefill?: SendPrefill | null;
+  onPrefillConsumed?: () => void;
 }
 
 export interface MessageMeta {
   contractAddress: string;
   method: string;
   params: Record<string, string>;
+  paramTypes: Array<'address' | 'u256' | 'bytes'>;
   messageHash: string;
 }
 
-export function MessageBuilder({ contracts, onMessageBuilt }: Props) {
+export function MessageBuilder({ contracts, onMessageBuilt, prefill, onPrefillConsumed }: Props) {
   const hasConfiguredContracts = contracts.length > 0;
+  const firstParamRef = useRef<HTMLInputElement>(null);
 
-  // If contracts are configured, use config mode exclusively
-  const [mode, setMode] = useState<InputMode>(hasConfiguredContracts ? 'op20' : 'op20');
+  const [mode, setMode] = useState<InputMode>(hasConfiguredContracts ? 'configured' : 'op20');
   const [contractAddr, setContractAddr] = useState(hasConfiguredContracts ? contracts[0]!.address : '');
   const [selectedMethod, setSelectedMethod] = useState('');
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
@@ -30,19 +34,34 @@ export function MessageBuilder({ contracts, onMessageBuilt }: Props) {
   const [abiMethods, setAbiMethods] = useState<MethodDef[]>([]);
   const [error, setError] = useState('');
 
-  // Determine available methods
+  // Handle prefill from Settings "send" link
+  useEffect(() => {
+    if (!prefill) return;
+    const isConfigured = contracts.some(c => c.address === prefill.contractAddress);
+    if (isConfigured) {
+      setMode('configured');
+      setContractAddr(prefill.contractAddress);
+      setSelectedMethod(prefill.method);
+      setParamValues({});
+      // Focus first param input after render
+      setTimeout(() => firstParamRef.current?.focus(), 50);
+    }
+    onPrefillConsumed?.();
+  }, [prefill, contracts, onPrefillConsumed]);
+
+  // Determine available methods based on mode
   const getAvailableMethods = (): MethodDef[] => {
-    if (hasConfiguredContracts) {
+    if (mode === 'configured') {
       const contract = contracts.find(c => c.address === contractAddr);
       if (!contract) return [];
-      // Filter OP20_METHODS to only configured ones, or use ABI methods
       if (contract.abi && contract.abi.length > 0) {
         return parseAbiMethods(contract.abi).filter(m => contract.methods.includes(m.name));
       }
       return OP20_METHODS.filter(m => contract.methods.includes(m.name));
     }
     if (mode === 'abi') return abiMethods;
-    return OP20_METHODS;
+    if (mode === 'op20') return OP20_METHODS;
+    return [];
   };
 
   const methods = getAvailableMethods();
@@ -95,6 +114,7 @@ export function MessageBuilder({ contracts, onMessageBuilt }: Props) {
         contractAddress: contractAddr,
         method: selectedMethod || 'raw',
         params: paramValues,
+        paramTypes: (currentMethod?.params || []).map(p => p.type),
         messageHash,
       });
     } catch (e) {
@@ -102,12 +122,35 @@ export function MessageBuilder({ contracts, onMessageBuilt }: Props) {
     }
   }, [mode, contractAddr, selectedMethod, paramValues, rawHex, currentMethod, onMessageBuilt]);
 
+  const tabs: { key: InputMode; label: string; disabled?: boolean }[] = [
+    ...(hasConfiguredContracts ? [{ key: 'configured' as const, label: 'Configured' }] : [{ key: 'configured' as const, label: 'Configured', disabled: true }]),
+    { key: 'op20', label: 'OP-20' },
+    { key: 'abi', label: 'Custom ABI' },
+    { key: 'raw', label: 'Raw Hex' },
+  ];
+
   return (
     <div className="card">
       <h2>Build Message</h2>
 
-      {/* Contract selector */}
-      {hasConfiguredContracts ? (
+      {/* Mode tabs */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {tabs.map(t => (
+          <button
+            key={t.key}
+            className={`btn ${mode === t.key ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ flex: 1, padding: '8px 12px', fontSize: 13, opacity: t.disabled ? 0.4 : 1 }}
+            onClick={() => { if (!t.disabled) { setMode(t.key); setSelectedMethod(''); setContractAddr(t.key === 'configured' && hasConfiguredContracts ? contracts[0]!.address : ''); setError(''); } }}
+            disabled={t.disabled}
+            title={t.disabled ? 'No contracts configured — add them in Settings' : undefined}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Configured mode: contract dropdown */}
+      {mode === 'configured' && (
         <div className="form-row">
           <label>
             Contract
@@ -118,40 +161,24 @@ export function MessageBuilder({ contracts, onMessageBuilt }: Props) {
             </select>
           </label>
         </div>
-      ) : (
-        <>
-          {/* Mode selector */}
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-            {(['op20', 'abi', 'raw'] as const).map(m => (
-              <button
-                key={m}
-                className={`btn ${mode === m ? 'btn-primary' : 'btn-secondary'}`}
-                style={{ flex: 1, padding: '8px 12px', fontSize: 13 }}
-                onClick={() => { setMode(m); setSelectedMethod(''); setError(''); }}
-              >
-                {m === 'op20' ? 'OP-20' : m === 'abi' ? 'Custom ABI' : 'Raw Hex'}
-              </button>
-            ))}
-          </div>
+      )}
 
-          {/* Contract address input (op20 and abi modes) */}
-          {mode !== 'raw' && (
-            <div className="form-row">
-              <label>
-                Contract Address
-                <input
-                  value={contractAddr}
-                  onChange={e => setContractAddr(e.target.value)}
-                  placeholder="0x..."
-                />
-              </label>
-            </div>
-          )}
-        </>
+      {/* OP-20 / ABI mode: manual address input */}
+      {(mode === 'op20' || mode === 'abi') && (
+        <div className="form-row">
+          <label>
+            Contract Address
+            <input
+              value={contractAddr}
+              onChange={e => setContractAddr(e.target.value)}
+              placeholder="0x..."
+            />
+          </label>
+        </div>
       )}
 
       {/* ABI paste area */}
-      {mode === 'abi' && !hasConfiguredContracts && (
+      {mode === 'abi' && (
         <div style={{ marginBottom: 16 }}>
           <textarea
             className="blob-textarea"
@@ -171,7 +198,7 @@ export function MessageBuilder({ contracts, onMessageBuilt }: Props) {
         <div className="form-row">
           <label>
             Method
-            <select value={selectedMethod} onChange={e => { setSelectedMethod(e.target.value); setParamValues({}); }}>
+            <select value={selectedMethod} onChange={e => { setSelectedMethod(e.target.value); setParamValues({}); setTimeout(() => firstParamRef.current?.focus(), 50); }}>
               <option value="">Select method...</option>
               {methods.map(m => (
                 <option key={m.name} value={m.name}>{m.label || m.name}</option>
@@ -182,11 +209,12 @@ export function MessageBuilder({ contracts, onMessageBuilt }: Props) {
       )}
 
       {/* Dynamic params */}
-      {currentMethod && currentMethod.params.map(p => (
+      {currentMethod && currentMethod.params.map((p, i) => (
         <div className="form-row" key={p.name}>
           <label>
             {p.name} <span style={{ color: 'var(--gray)', fontWeight: 400 }}>({p.type})</span>
             <input
+              ref={i === 0 ? firstParamRef : undefined}
               value={paramValues[p.name] || ''}
               onChange={e => handleParamChange(p.name, e.target.value)}
               placeholder={p.placeholder || p.name}

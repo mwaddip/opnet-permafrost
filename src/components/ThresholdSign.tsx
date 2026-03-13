@@ -21,12 +21,13 @@ interface ShareImportProps {
   onShareLoaded: (share: DecryptedShare) => void;
 }
 
-function ShareImport({ onShareLoaded }: ShareImportProps) {
+export function ShareImport({ onShareLoaded }: ShareImportProps) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [fileName, setFileName] = useState('');
   const fileRef = useRef<ShareFile | null>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setError('');
@@ -38,6 +39,7 @@ function ShareImport({ onShareLoaded }: ShareImportProps) {
     reader.onload = () => {
       try {
         fileRef.current = JSON.parse(reader.result as string) as ShareFile;
+        setTimeout(() => passwordRef.current?.focus(), 50);
       } catch {
         setError('Invalid share file (not valid JSON)');
         fileRef.current = null;
@@ -72,7 +74,7 @@ function ShareImport({ onShareLoaded }: ShareImportProps) {
     <div className="threshold-share-import">
       <div className="threshold-section-title">Import Share File</div>
       <p className="threshold-hint">
-        Load your encrypted PERMAFROST share file and enter your password to
+        Load your encrypted share file and enter your password to
         unlock it. The share is held in memory only.
       </p>
 
@@ -85,6 +87,7 @@ function ShareImport({ onShareLoaded }: ShareImportProps) {
       <div className="step-field">
         <label>Password</label>
         <input
+          ref={passwordRef}
           type="password"
           placeholder="Share file password"
           value={password}
@@ -286,6 +289,8 @@ interface ThresholdSignProps {
   onCancel: () => void;
   /** Relay client for WebSocket-based blob exchange (optional — used by relay modes). */
   relayClient?: RelayClient | null;
+  /** Whether the relay client is ready (React state — triggers re-render when relay becomes ready). */
+  relayReady?: boolean;
   /** Party ID assigned by the relay server (optional — used by relay modes). */
   relayPartyId?: number;
 }
@@ -299,6 +304,7 @@ export function ThresholdSign({
   onSignatureReady,
   onCancel,
   relayClient,
+  relayReady: relayReadyProp,
   relayPartyId: _relayPartyId,
 }: ThresholdSignProps) {
   // relayPartyId is the relay-server-assigned ID (used by the caller for routing);
@@ -310,18 +316,14 @@ export function ThresholdSign({
   const [activePartyIds, setActivePartyIds] = useState<number[]>([]);
   const [partyInput, setPartyInput] = useState('');
 
-  // Cleanup on unmount
+  // Session ref — intentionally no unmount cleanup here because StrictMode's
+  // double-mount cycle would destroy round1State/round2State while the session
+  // is still active. Session is destroyed explicitly in handleCancel/handleRetry.
   const sessionRef = useRef<SigningSession | null>(null);
-  useEffect(() => {
-    return () => {
-      if (sessionRef.current) {
-        destroySession(sessionRef.current);
-      }
-    };
-  }, []);
 
-  // Ref to track whether relay auto-init has fired (prevent double-start)
+  // Ref to track whether auto-init has fired (prevent double-start)
   const relayInitRef = useRef(false);
+  const autoStartRef = useRef(false);
 
   // Parse active party IDs from comma-separated input.
   // The threshold library requires EXACTLY T active parties (not more).
@@ -346,6 +348,13 @@ export function ThresholdSign({
   // Track whether our current round's blob has been sent
   const [roundBlobSent, setRoundBlobSent] = useState(false);
 
+  // Pre-signing barrier: all parties must exchange SIGNING_READY before any
+  // round 1 blobs are broadcast. This prevents the race where the initiator
+  // sends its blob before joiner ThresholdSign components have mounted.
+  const [signingReadyPeers, setSigningReadyPeers] = useState<Set<number>>(new Set());
+  const signingReadySentRef = useRef(false);
+  const round1BlobRef = useRef<string | null>(null);
+
   // Barrier synchronization: each party broadcasts BARRIER:<round>:<partyId>
   // after sending its blob AND collecting all expected blobs. No party advances
   // until all T barriers for the current round are received.
@@ -362,15 +371,20 @@ export function ThresholdSign({
     setPhase('round1');
     setRoundBlobSent(false);
 
-    // In relay mode, auto-broadcast round 1 blob (await before marking sent)
-    if (relayClient && blob) {
-      void (async () => {
-        const blobBytes = new TextEncoder().encode(blob);
-        await relayClient.broadcast(blobBytes);
-        setRoundBlobSent(true);
-      })();
+    if (relayClient) {
+      // Relay mode: store the blob — it will be broadcast after SIGNING_READY barrier
+      round1BlobRef.current = blob;
     }
   }, [message, share, relayClient]);
+
+  // Auto-start signing when threshold === parties (all parties must participate, no choice)
+  useEffect(() => {
+    if (autoStartRef.current || relayClient || phase !== 'idle') return;
+    if (share.threshold !== share.parties) return;
+    autoStartRef.current = true;
+    const ids = Array.from({ length: share.parties }, (_, i) => i);
+    startSigningWithIds(ids);
+  }, [share.threshold, share.parties, relayClient, phase, startSigningWithIds]);
 
   // Start signing (manual mode — parses party IDs from input)
   const startSigning = useCallback(() => {
@@ -484,7 +498,7 @@ export function ThresholdSign({
   // Relay: auto-initialize signing when relayClient is provided
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    if (!relayClient || !relayClient.isReady || relayInitRef.current) return;
+    if (!relayClient || !relayReadyProp || relayInitRef.current) return;
     if (phase !== 'idle') return;
 
     // Derive active party IDs from relay's parties map
@@ -496,7 +510,34 @@ export function ThresholdSign({
 
     relayInitRef.current = true;
     startSigningWithIds(activeIds);
-  }, [relayClient, phase, share.threshold, startSigningWithIds]);
+  }, [relayClient, relayReadyProp, phase, share.threshold, startSigningWithIds]);
+
+  // ---------------------------------------------------------------------------
+  // Relay: broadcast SIGNING_READY when round1 starts
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!relayClient || phase !== 'round1' || signingReadySentRef.current) return;
+    signingReadySentRef.current = true;
+    void broadcastBlob(`SIGNING_READY:${share.partyId}`);
+    setSigningReadyPeers(prev => new Set(prev).add(share.partyId));
+  }, [relayClient, phase, share.partyId, broadcastBlob]);
+
+  // ---------------------------------------------------------------------------
+  // Relay: broadcast round 1 blob once all parties are SIGNING_READY
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!relayClient || phase !== 'round1') return;
+    if (signingReadyPeers.size < activePartyIds.length) return;
+    if (!round1BlobRef.current || roundBlobSent) return;
+
+    const blob = round1BlobRef.current;
+    round1BlobRef.current = null;
+    void (async () => {
+      const blobBytes = new TextEncoder().encode(blob);
+      await relayClient.broadcast(blobBytes);
+      setRoundBlobSent(true);
+    })();
+  }, [relayClient, phase, signingReadyPeers, activePartyIds.length, roundBlobSent]);
 
   // ---------------------------------------------------------------------------
   // Relay: subscribe to incoming messages and feed into addBlob
@@ -505,6 +546,14 @@ export function ThresholdSign({
     if (!relayClient) return;
     const handler = (_from: number, payload: Uint8Array) => {
       const text = new TextDecoder().decode(payload);
+
+      // Intercept SIGNING_READY messages (pre-signing barrier)
+      const readyMatch = text.match(/^SIGNING_READY:(\d+)$/);
+      if (readyMatch) {
+        const pid = parseInt(readyMatch[1]!, 10);
+        setSigningReadyPeers(prev => new Set(prev).add(pid));
+        return;
+      }
 
       // Intercept barrier messages
       const m = text.match(/^BARRIER:(\w+):(\d+)$/);
@@ -648,7 +697,7 @@ export function ThresholdSign({
         params={txParams}
       />
 
-      {phase === 'idle' && !relayClient && (
+      {phase === 'idle' && !relayClient && share.threshold < share.parties && (
         <div className="threshold-idle">
           <p className="threshold-hint">
             This step requires {share.threshold}-of-{share.parties} threshold

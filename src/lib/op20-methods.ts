@@ -1,6 +1,6 @@
 /**
  * Standard OP-20 contract method definitions for the signing page.
- * These are the methods available on any OP-20 token contract.
+ * Based on IOP20Contract interface from the opnet SDK.
  */
 
 export type ParamType = 'address' | 'u256' | 'bytes';
@@ -36,11 +36,22 @@ export const OP20_METHODS: MethodDef[] = [
     ],
   },
   {
-    name: 'approve',
-    label: 'Approve',
+    name: 'safeTransfer',
+    label: 'Safe Transfer',
     params: [
-      { name: 'spender', type: 'address', placeholder: 'Spender address' },
+      { name: 'to', type: 'address', placeholder: '0x... or opt1...' },
       { name: 'amount', type: 'u256', placeholder: 'Amount (smallest unit)' },
+      { name: 'data', type: 'bytes', placeholder: 'Callback data (hex)' },
+    ],
+  },
+  {
+    name: 'safeTransferFrom',
+    label: 'Safe Transfer From',
+    params: [
+      { name: 'from', type: 'address', placeholder: 'From address' },
+      { name: 'to', type: 'address', placeholder: 'To address' },
+      { name: 'amount', type: 'u256', placeholder: 'Amount (smallest unit)' },
+      { name: 'data', type: 'bytes', placeholder: 'Callback data (hex)' },
     ],
   },
   {

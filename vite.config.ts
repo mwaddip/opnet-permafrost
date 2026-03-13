@@ -8,9 +8,9 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://localhost:8080',
+      '/api': `http://localhost:${process.env.BACKEND_PORT || '8080'}`,
       '/ws': {
-        target: 'ws://localhost:8080',
+        target: `ws://localhost:${process.env.BACKEND_PORT || '8080'}`,
         ws: true,
       },
     },

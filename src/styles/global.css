@@ -1,21 +1,54 @@
+/* ── Dark theme (default) ── */
 :root {
-  --bg:          #0F1113;
-  --bg-raised:   #151719;
-  --bg-surface:  #1B1D20;
-  --bg-card:     #1B1D20;
-  --accent:      #3B82F6;
-  --accent-hover: #2563EB;
-  --accent-dim:  rgba(59, 130, 246, 0.12);
-  --accent-tint: rgba(59, 130, 246, 0.08);
-  --white:       #EDEFF2;
-  --white-dim:   rgba(237, 239, 242, 0.6);
-  --gray:        #6B6B6B;
-  --gray-light:  #AEB4BC;
-  --red:         #E74C3C;
-  --green:       #2ECC71;
-  --font:        'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --radius:      8px;
-  --radius-lg:   12px;
+  --bg:          #000000;
+  --bg-raised:   #0A0A0A;
+  --bg-surface:  #111111;
+  --bg-card:     #0A0A0A;
+  --fg:          #F5F7FA;
+  --fg-dim:      rgba(245, 247, 250, 0.5);
+  --accent:      #F7931A;
+  --accent-hover: #FFB04D;
+  --accent-dim:  rgba(247, 147, 26, 0.15);
+  --accent-tint: rgba(247, 147, 26, 0.08);
+  --white:       #F5F7FA;
+  --white-dim:   rgba(245, 247, 250, 0.5);
+  --gray:        #555555;
+  --gray-light:  #888888;
+  --gray-dark:   #1A1A1A;
+  --red:         #FF4444;
+  --green:       #44FF44;
+  --border:      rgba(247, 147, 26, 0.25);
+  --border-dim:  rgba(247, 147, 26, 0.12);
+  --logo-color:  var(--fg);
+  --font:        'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  --radius:      0px;
+  --radius-lg:   0px;
+  color-scheme: dark;
+}
+
+/* ── Light theme ── */
+:root[data-theme="light"] {
+  --bg:          #F0F0F0;
+  --bg-raised:   #E5E5E5;
+  --bg-surface:  #FFFFFF;
+  --bg-card:     #FFFFFF;
+  --fg:          #111111;
+  --fg-dim:      rgba(17, 17, 17, 0.5);
+  --accent:      #D97E0A;
+  --accent-hover: #F7931A;
+  --accent-dim:  rgba(217, 126, 10, 0.12);
+  --accent-tint: rgba(217, 126, 10, 0.06);
+  --white:       #111111;
+  --white-dim:   rgba(17, 17, 17, 0.5);
+  --gray:        #999999;
+  --gray-light:  #666666;
+  --gray-dark:   #D0D0D0;
+  --red:         #CC0000;
+  --green:       #008800;
+  --border:      rgba(217, 126, 10, 0.3);
+  --border-dim:  rgba(217, 126, 10, 0.15);
+  --logo-color:  var(--fg);
+  color-scheme: light;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -25,9 +58,14 @@ html, body, #root {
   background: var(--bg);
   color: var(--white);
   font-family: var(--font);
-  font-size: 16px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent);
+  color: #000;
 }
 
 button {
@@ -40,14 +78,13 @@ button {
 
 input, select {
   font-family: var(--font);
-  background: var(--bg-raised);
+  background: var(--bg);
   color: var(--white);
-  border: 1px solid rgba(237, 239, 242, 0.1);
-  border-radius: var(--radius);
-  padding: 10px 14px;
-  font-size: 16px;
+  border: 1px solid var(--border-dim);
+  padding: 8px 12px;
+  font-size: 14px;
   outline: none;
-  transition: border-color 0.15s ease-out;
+  transition: border-color 0.1s;
 }
 
 input:focus, select:focus {
@@ -56,4 +93,19 @@ input:focus, select:focus {
 
 input::placeholder {
   color: var(--gray);
+}
+
+/* ── Theme toggle ── */
+.theme-toggle {
+  background: none;
+  border: none;
+  color: var(--gray-light);
+  font-size: 16px;
+  padding: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.theme-toggle:hover {
+  color: var(--accent);
 }

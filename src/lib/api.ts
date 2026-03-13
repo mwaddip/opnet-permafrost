@@ -66,7 +66,7 @@ export const importConfig = (config: VaultConfig) =>
 // ── Wallet ──
 
 export const generateWallet = () =>
-  json<{ ok: true; config: VaultConfig }>('/wallet/generate', { method: 'POST' });
+  json<{ ok: true; mnemonic: string; config: VaultConfig }>('/wallet/generate', { method: 'POST' });
 
 export const skipWallet = (dontShowAgain: boolean) =>
   json<{ ok: true }>('/wallet/skip', {
@@ -94,7 +94,7 @@ export const saveDKG = (data: {
 // ── Balances ──
 
 export const getBalances = () =>
-  json<{ balances: Array<{ address: string; name: string; symbol: string; balance: string }> }>('/balances');
+  json<{ balances: Array<{ address: string; name: string; symbol: string; balance: string; decimals: number }> }>('/balances');
 
 // ── TX ──
 
@@ -114,6 +114,7 @@ export const broadcastTx = (data: {
   contract: string;
   method: string;
   params: unknown[];
+  paramTypes?: Array<'address' | 'u256' | 'bytes'>;
   abi?: unknown[];
   signature: string;
   messageHash: string;

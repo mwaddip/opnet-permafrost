@@ -415,6 +415,11 @@ export class RelayClient {
       const rawPub = fromBase64(b64);
       pubkeyMap.set(peerId, rawPub);
 
+      // Ensure parties map is complete (joiners miss earlier joined events)
+      if (!this.parties.has(peerId)) {
+        this.parties.set(peerId, { connected: true });
+      }
+
       // Derive AES key for each peer (skip ourselves)
       if (peerId !== this.partyId) {
         const importedPub = await importPublicKey(rawPub);

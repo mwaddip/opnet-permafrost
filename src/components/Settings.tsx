@@ -1,23 +1,49 @@
 import { useState, useEffect } from 'react';
-import { getConfig, getWalletBalance, getBalances, resetInstance } from '../lib/api';
-import type { VaultConfig } from '../lib/vault-types';
+import { getConfig, getWalletBalance, getBalances, resetInstance, updateContracts } from '../lib/api';
+import { OP20_METHODS } from '../lib/op20-methods';
+import type { VaultConfig, ContractConfig } from '../lib/vault-types';
+import type { SendPrefill } from '../App';
 
 interface Props {
   onBack: () => void;
+  onSend: (prefill: SendPrefill) => void;
 }
 
-export function Settings({ onBack }: Props) {
+function formatTokenBalance(raw: string, decimals: number): string {
+  if (decimals === 0) return raw;
+  const bi = BigInt(raw);
+  const divisor = 10n ** BigInt(decimals);
+  const whole = bi / divisor;
+  const remainder = bi % divisor;
+  if (remainder === 0n) return whole.toString();
+  const fracStr = remainder.toString().padStart(decimals, '0').replace(/0+$/, '');
+  return `${whole}.${fracStr}`;
+}
+
+async function deriveOpnetIdentity(combinedPubKeyHex: string): Promise<string> {
+  const bytes = new Uint8Array(combinedPubKeyHex.match(/.{2}/g)!.map(b => parseInt(b, 16)));
+  const hash = await crypto.subtle.digest('SHA-256', bytes.buffer as ArrayBuffer);
+  return '0x' + Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+export function Settings({ onBack, onSend }: Props) {
   const [config, setConfig] = useState<VaultConfig | null>(null);
   const [balance, setBalance] = useState<string>('0');
-  const [tokenBalances, setTokenBalances] = useState<Array<{ symbol: string; balance: string }>>([]);
+  const [tokenBalances, setTokenBalances] = useState<Array<{ address: string; symbol: string; balance: string; decimals: number }>>([]);
+  const [opnetIdentity, setOpnetIdentity] = useState<string | null>(null);
   const [resetStep, setResetStep] = useState<0 | 1 | 2>(0);
   const [resetInput, setResetInput] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
-    getConfig().then(setConfig).catch(console.error);
+    getConfig().then(c => {
+      setConfig(c);
+      if (c.permafrost?.combinedPubKey) {
+        deriveOpnetIdentity(c.permafrost.combinedPubKey).then(setOpnetIdentity).catch(() => {});
+      }
+    }).catch(console.error);
     getWalletBalance().then(r => setBalance(r.balance)).catch(() => {});
-    getBalances().then(r => setTokenBalances(r.balances.map(b => ({ symbol: b.symbol, balance: b.balance })))).catch(() => {});
+    getBalances().then(r => setTokenBalances(r.balances.map(b => ({ address: b.address, symbol: b.symbol, balance: b.balance, decimals: b.decimals })))).catch(() => {});
   }, []);
 
   const handleReset = async () => {
@@ -56,10 +82,6 @@ export function Settings({ onBack }: Props) {
               <strong style={{ fontSize: 13, color: 'var(--gray-light)' }}>P2TR Address</strong>
               <div className="pubkey-display" style={{ fontSize: 12, marginTop: 4 }}>{config.wallet.p2tr}</div>
             </div>
-            <div style={{ marginBottom: 8 }}>
-              <strong style={{ fontSize: 13, color: 'var(--gray-light)' }}>Tweaked Public Key</strong>
-              <div className="pubkey-display" style={{ fontSize: 12, marginTop: 4 }}>{config.wallet.tweakedPubKey}</div>
-            </div>
             <div>
               <strong style={{ fontSize: 13, color: 'var(--gray-light)' }}>BTC Balance</strong>
               <div style={{ fontSize: 16, fontWeight: 600, marginTop: 4 }}>{(parseInt(balance) / 1e8).toFixed(8)} BTC</div>
@@ -75,6 +97,12 @@ export function Settings({ onBack }: Props) {
         <div className="card">
           <h2>Permafrost</h2>
           <p>{config.permafrost.threshold}-of-{config.permafrost.parties} threshold · Security level {config.permafrost.level}</p>
+          {opnetIdentity && (
+            <div style={{ marginTop: 8 }}>
+              <strong style={{ fontSize: 13, color: 'var(--gray-light)' }}>OPNet Identity</strong>
+              <div className="pubkey-display" style={{ fontSize: 12, marginTop: 4 }}>{opnetIdentity}</div>
+            </div>
+          )}
           <div style={{ marginTop: 8 }}>
             <strong style={{ fontSize: 13, color: 'var(--gray-light)' }}>Combined ML-DSA Public Key</strong>
             <div className="pubkey-display" style={{ fontSize: 11, marginTop: 4 }}>
@@ -89,29 +117,32 @@ export function Settings({ onBack }: Props) {
         <div className="card">
           <h2>Token Balances</h2>
           {tokenBalances.map((t, i) => (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 14 }}>
-              <span>{t.symbol}</span>
-              <span style={{ fontFamily: 'monospace' }}>{t.balance}</span>
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', fontSize: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span>{t.symbol}</span>
+                <button
+                  style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1 }}
+                  onClick={() => onSend({ contractAddress: t.address, method: 'transfer' })}
+                  title="Send"
+                >
+                  ↗
+                </button>
+              </div>
+              <span style={{ fontFamily: 'monospace' }}>{formatTokenBalance(t.balance, t.decimals)}</span>
             </div>
           ))}
         </div>
       )}
 
       {/* Contracts */}
-      <div className="card">
-        <h2>Configured Contracts</h2>
-        {config.contracts.length === 0 ? (
-          <p>No contracts configured. All OP-20 methods available for any contract.</p>
-        ) : (
-          config.contracts.map((c, i) => (
-            <div key={i} style={{ marginBottom: 8 }}>
-              <strong style={{ fontSize: 14 }}>{c.name || 'Unnamed'}</strong>
-              <div style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--white-dim)' }}>{c.address}</div>
-              <div style={{ fontSize: 12, color: 'var(--gray-light)' }}>Methods: {c.methods.join(', ')}</div>
-            </div>
-          ))
-        )}
-      </div>
+      <ContractManager
+        contracts={config.contracts}
+        onUpdate={(contracts) => {
+          updateContracts(contracts).then(() => {
+            setConfig(prev => prev ? { ...prev, contracts } : prev);
+          }).catch(e => setError((e as Error).message));
+        }}
+      />
 
       {/* Reset */}
       <div className="card">
@@ -151,6 +182,203 @@ export function Settings({ onBack }: Props) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Contract Manager ──
+
+type ContractType = 'op20' | 'custom';
+
+function ContractManager({ contracts, onUpdate }: { contracts: ContractConfig[]; onUpdate: (c: ContractConfig[]) => void }) {
+  const [adding, setAdding] = useState(false);
+  const [contractType, setContractType] = useState<ContractType>('op20');
+  const [name, setName] = useState('');
+  const [address, setAddress] = useState('');
+  const [selectedMethods, setSelectedMethods] = useState<Set<string>>(new Set());
+  const [abiText, setAbiText] = useState('');
+  const [abiError, setAbiError] = useState('');
+  const [parsedAbiMethods, setParsedAbiMethods] = useState<string[]>([]);
+
+  const resetForm = () => {
+    setAdding(false);
+    setContractType('op20');
+    setName('');
+    setAddress('');
+    setSelectedMethods(new Set());
+    setAbiText('');
+    setAbiError('');
+    setParsedAbiMethods([]);
+  };
+
+  const handleParseAbi = () => {
+    try {
+      const abi = JSON.parse(abiText) as Array<{ name?: string; inputs?: unknown[] }>;
+      const methodNames = abi.filter(e => e.name && e.inputs).map(e => e.name!);
+      if (methodNames.length === 0) { setAbiError('No callable methods found in ABI'); return; }
+      setParsedAbiMethods(methodNames);
+      setSelectedMethods(new Set(methodNames));
+      setAbiError('');
+    } catch {
+      setAbiError('Invalid JSON');
+    }
+  };
+
+  const toggleMethod = (m: string) => {
+    setSelectedMethods(prev => {
+      const next = new Set(prev);
+      if (next.has(m)) next.delete(m); else next.add(m);
+      return next;
+    });
+  };
+
+  const handleAdd = () => {
+    if (!name.trim() || !address.trim()) return;
+    if (selectedMethods.size === 0) return;
+
+    const newContract: ContractConfig = {
+      name: name.trim(),
+      address: address.trim(),
+      methods: [...selectedMethods],
+      abi: contractType === 'custom' ? JSON.parse(abiText) : [],
+    };
+    onUpdate([...contracts, newContract]);
+    resetForm();
+  };
+
+  const handleRemove = (index: number) => {
+    onUpdate(contracts.filter((_, i) => i !== index));
+  };
+
+  const availableMethods = contractType === 'op20'
+    ? OP20_METHODS.map(m => m.name)
+    : parsedAbiMethods;
+
+  return (
+    <div className="card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <h2 style={{ marginBottom: 0 }}>Contracts</h2>
+        {!adding && (
+          <button className="btn btn-secondary" style={{ fontSize: 13, padding: '6px 14px' }} onClick={() => setAdding(true)}>
+            + Add Contract
+          </button>
+        )}
+      </div>
+
+      {/* Existing contracts */}
+      {contracts.length === 0 && !adding && (
+        <p style={{ color: 'var(--white-dim)', fontSize: 13 }}>
+          No contracts configured. The signing page will show all OP-20 methods with manual address entry.
+        </p>
+      )}
+      {contracts.map((c, i) => (
+        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '10px 0', borderBottom: '1px solid var(--gray-dark)' }}>
+          <div>
+            <strong style={{ fontSize: 14 }}>{c.name}</strong>
+            {c.abi && c.abi.length > 0 && <span style={{ fontSize: 11, color: 'var(--accent)', marginLeft: 8 }}>Custom ABI</span>}
+            <div style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--white-dim)', marginTop: 2 }}>{c.address}</div>
+            <div style={{ fontSize: 12, color: 'var(--gray-light)', marginTop: 2 }}>{c.methods.join(', ')}</div>
+          </div>
+          <button
+            className="btn btn-secondary"
+            style={{ fontSize: 12, padding: '4px 10px', color: 'var(--red)', flexShrink: 0 }}
+            onClick={() => handleRemove(i)}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+
+      {/* Add contract form */}
+      {adding && (
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--gray-dark)' }}>
+          <h3 style={{ fontSize: 15, marginBottom: 12 }}>Add Contract</h3>
+
+          {/* Type selector */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+            <button
+              className={`btn ${contractType === 'op20' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ flex: 1, padding: '8px 12px', fontSize: 13 }}
+              onClick={() => { setContractType('op20'); setSelectedMethods(new Set()); setParsedAbiMethods([]); setAbiText(''); }}
+            >
+              Standard OP-20
+            </button>
+            <button
+              className={`btn ${contractType === 'custom' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ flex: 1, padding: '8px 12px', fontSize: 13 }}
+              onClick={() => { setContractType('custom'); setSelectedMethods(new Set()); }}
+            >
+              Custom ABI
+            </button>
+          </div>
+
+          <div className="form-row">
+            <label>
+              Name
+              <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. WBTC Token" />
+            </label>
+          </div>
+          <div className="form-row">
+            <label>
+              Contract Address
+              <input value={address} onChange={e => setAddress(e.target.value)} placeholder="0x..." />
+            </label>
+          </div>
+
+          {/* Custom ABI input */}
+          {contractType === 'custom' && (
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', fontSize: 13, color: 'var(--gray-light)', marginBottom: 6 }}>ABI (required)</label>
+              <textarea
+                className="blob-textarea"
+                value={abiText}
+                onChange={e => setAbiText(e.target.value)}
+                placeholder="Paste ABI JSON array..."
+                rows={4}
+              />
+              {abiError && <div className="warning" style={{ marginTop: 8 }}>{abiError}</div>}
+              <button className="btn btn-secondary" style={{ marginTop: 8, fontSize: 13 }} onClick={handleParseAbi}>
+                Parse ABI
+              </button>
+            </div>
+          )}
+
+          {/* Method selection */}
+          {availableMethods.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', fontSize: 13, color: 'var(--gray-light)', marginBottom: 8 }}>Methods</label>
+              <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+                <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px' }} onClick={() => setSelectedMethods(new Set(availableMethods))}>
+                  Select All
+                </button>
+                <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px' }} onClick={() => setSelectedMethods(new Set())}>
+                  Clear
+                </button>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {availableMethods.map(m => (
+                  <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, cursor: 'pointer', padding: '4px 8px', borderRadius: 6, background: selectedMethods.has(m) ? 'var(--gray-dark)' : 'transparent' }}>
+                    <input type="checkbox" checked={selectedMethods.has(m)} onChange={() => toggleMethod(m)} />
+                    {m}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={resetForm}>Cancel</button>
+            <button
+              className="btn btn-primary"
+              style={{ flex: 1 }}
+              onClick={handleAdd}
+              disabled={!name.trim() || !address.trim() || selectedMethods.size === 0 || (contractType === 'custom' && parsedAbiMethods.length === 0)}
+            >
+              Add
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

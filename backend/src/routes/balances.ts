@@ -25,16 +25,17 @@ export function balanceRoutes(store: ConfigStore): Router {
         config.wallet.tweakedPubKey,
       );
 
-      const balances: Array<{ address: string; name: string; symbol: string; balance: string }> = [];
+      const balances: Array<{ address: string; name: string; symbol: string; balance: string; decimals: number }> = [];
 
       for (const c of config.contracts) {
         try {
           const contract = getContract(c.address, OP_20_ABI, provider, network);
           type ContractFnMap = Record<string, (...args: unknown[]) => Promise<{ properties: Record<string, unknown> }>>;
           const c2 = contract as unknown as ContractFnMap;
-          const [nameResult, symbolResult, balResult] = await Promise.all([
+          const [nameResult, symbolResult, decimalsResult, balResult] = await Promise.all([
             c2['name']!(),
             c2['symbol']!(),
+            c2['decimals']!(),
             c2['balanceOf']!(opnetAddr),
           ]);
           balances.push({
@@ -42,6 +43,7 @@ export function balanceRoutes(store: ConfigStore): Router {
             name: nameResult.properties['name'] as string,
             symbol: symbolResult.properties['symbol'] as string,
             balance: String(balResult.properties['balance']),
+            decimals: Number(decimalsResult.properties['decimals']),
           });
         } catch {
           // Skip contracts that fail (might not be OP-20)

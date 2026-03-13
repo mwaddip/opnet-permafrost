@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 262 152" fill="currentColor">
+  <!--
+    Ötzi wordmark — 16-segment display style
+    Ö: thinner 14px verticals, hex horizontals
+    t: split verticals + left-half crossbar
+    z: hex horizontals + 16-seg diagonal
+    i: cheated dot + hex stem
+  -->
+
+  <!-- ═══ Ö (thinner verticals) ═══ -->
+  <!-- Umlaut dots -->
+  <g opacity="0.9">
+    <rect x="36" y="8" width="16" height="12"/>
+    <rect x="60" y="8" width="16" height="12"/>
+  </g>
+  <!-- Top horizontal (hex) -->
+  <polygon points="24,38 32,32 80,32 88,38 80,44 32,44"/>
+  <!-- Left vertical (14px) -->
+  <polygon points="18,44 25,51 25,107 18,114 11,107 11,51"/>
+  <!-- Right vertical (14px) -->
+  <polygon points="94,44 101,51 101,107 94,114 87,107 87,51"/>
+  <!-- Bottom horizontal (hex) -->
+  <polygon points="24,138 32,132 80,132 88,138 80,144 32,144"/>
+  <!-- Lower-left diamond -->
+  <polygon points="24,120 32,128 24,136 16,128"/>
+  <!-- Lower-right diamond -->
+  <polygon points="88,120 96,128 88,136 80,128"/>
+
+
+  <!-- ═══ t (split verticals + left-half crossbar) ═══ -->
+  <!-- Upper stem (ascender to crossbar) -->
+  <polygon points="120,52 127,59 127,79 120,86 113,79 113,59"/>
+  <!-- Lower stem (below crossbar to baseline) -->
+  <polygon points="120,98 127,105 127,125 120,132 113,125 113,105"/>
+  <!-- Crossbar left-half (hex) -->
+  <polygon points="127,92 131,86 145,86 149,92 145,98 131,98"/>
+  <!-- Bottom horizontal (hex) -->
+  <polygon points="127,138 133,132 158,132 164,138 158,144 133,144"/>
+
+
+  <!-- ═══ z ═══ -->
+  <!-- Top horizontal (hex) -->
+  <polygon points="176,92 182,86 214,86 220,92 214,98 182,98"/>
+  <!-- 16-segment diagonal (top-right to bottom-left) -->
+  <polygon points="208,98 222,98 188,132 174,132"/>
+  <!-- Bottom horizontal (hex) -->
+  <polygon points="176,138 182,132 214,132 220,138 214,144 182,144"/>
+
+
+  <!-- ═══ i ═══ -->
+  <!-- Cheated dot -->
+  <rect x="240" y="74" width="12" height="10"/>
+  <!-- Vertical stem -->
+  <polygon points="246,92 253,99 253,137 246,144 239,137 239,99"/>
+
+</svg>

@@ -45,6 +45,7 @@ import {
 import { RelayClient } from '../lib/relay';
 import { sessionFingerprint } from '../lib/relay-crypto';
 import type { ThresholdKeyShare } from '@btc-vision/post-quantum/threshold-ml-dsa.js';
+import { OtziWordmark } from '../App';
 
 // ── Constants ──
 
@@ -1056,7 +1057,10 @@ export function DKGWizard({ onComplete }: DKGWizardProps = {}) {
 
   return (
     <div className="ceremony">
-      <h1>PERMAFROST DKG Ceremony</h1>
+      <div style={{ textAlign: 'center', marginBottom: 8 }}>
+        <OtziWordmark height={44} />
+      </div>
+      <h1 style={{ textAlign: 'center', fontSize: 18, fontWeight: 500, marginBottom: 0 }}>DKG Ceremony</h1>
       <p className="subtitle">
         Distributed {state.threshold}-of-{state.parties} threshold ML-DSA key generation
       </p>

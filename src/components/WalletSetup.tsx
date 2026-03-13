@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { generateWallet, skipWallet } from '../lib/api';
+import { OtziWordmark } from '../App';
 
 interface Props {
   onComplete: () => void;
@@ -18,13 +19,8 @@ export function WalletSetup({ onComplete }: Props) {
     setError('');
     try {
       const result = await generateWallet();
-      // The backend generates the wallet and returns the config (sans mnemonic).
-      // We need a separate endpoint or the backend response to include
-      // the mnemonic ONE TIME for backup display.
-      // For now, the config response has the p2tr address.
       setP2tr(result.config.wallet?.p2tr ?? null);
-      // TODO: Backend should return mnemonic once for display
-      setMnemonic('(Mnemonic will be shown here — backend needs to return it once)');
+      setMnemonic(result.mnemonic);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -46,8 +42,10 @@ export function WalletSetup({ onComplete }: Props) {
 
   return (
     <div className="ceremony">
-      <h1>PERMAFROST Vault</h1>
-      <p className="subtitle">Wallet Setup</p>
+      <div style={{ textAlign: 'center', marginBottom: 8 }}>
+        <OtziWordmark height={48} />
+      </div>
+      <p className="subtitle" style={{ textAlign: 'center' }}>Wallet Setup</p>
 
       {!mnemonic ? (
         <div className="card">

@@ -27,14 +27,12 @@ app.use('/api/tx', txRoutes(store));
 app.use('/api/balances', balanceRoutes(store));
 
 // Proxy WebSocket to relay
-app.use(
-  '/ws',
-  createProxyMiddleware({
-    target: `http://127.0.0.1:${RELAY_PORT}`,
-    ws: true,
-    changeOrigin: true,
-  }),
-);
+const wsProxy = createProxyMiddleware({
+  target: `http://127.0.0.1:${RELAY_PORT}`,
+  ws: true,
+  changeOrigin: true,
+});
+app.use('/ws', wsProxy);
 
 // Serve frontend static files
 const distDir = join(__dirname, '..', 'dist');
@@ -43,9 +41,12 @@ app.get('*', (_req, res) => {
   res.sendFile(join(distDir, 'index.html'));
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`permafrost-vault backend listening on :${PORT}`);
 });
+
+// Wire WebSocket upgrade to the proxy
+server.on('upgrade', wsProxy.upgrade);
 
 // Export for route registration by other modules
 export { store };

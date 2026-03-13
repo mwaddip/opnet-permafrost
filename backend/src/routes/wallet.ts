@@ -28,7 +28,8 @@ export function walletRoutes(store: ConfigStore): Router {
       wallet.zeroize();
 
       const updated = store.get();
-      res.json({ ok: true, config: sanitizeConfig(updated) });
+      // Return mnemonic ONE TIME for the backup display. It's never returned again.
+      res.json({ ok: true, mnemonic: phrase, config: sanitizeConfig(updated) });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
