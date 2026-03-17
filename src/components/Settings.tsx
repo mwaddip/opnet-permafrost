@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getConfig, getWalletBalance, getBalances, resetInstance, updateContracts, updateHosting, removeHosting } from '../lib/api';
+import { getConfig, getWalletBalance, getBalances, resetInstance, updateContracts, updateHosting, removeHosting, adminUnlock, setAdminToken, clearAdminToken, hasAdminToken } from '../lib/api';
 import { OP20_METHODS } from '../lib/op20-methods';
 import type { VaultConfig, ContractConfig } from '../lib/vault-types';
 import type { SendPrefill } from '../App';
@@ -34,6 +34,36 @@ export function Settings({ onBack, onSend }: Props) {
   const [resetStep, setResetStep] = useState<0 | 1 | 2>(0);
   const [resetInput, setResetInput] = useState('');
   const [error, setError] = useState('');
+  const [unlocked, setUnlocked] = useState(hasAdminToken());
+  const [unlockPassword, setUnlockPassword] = useState('');
+  const [unlockError, setUnlockError] = useState('');
+  const [unlocking, setUnlocking] = useState(false);
+  const [showUnlockInput, setShowUnlockInput] = useState(false);
+
+  const needsAdmin = config?.hasAdminPassword ?? false;
+  const isLocked = needsAdmin && !unlocked;
+
+  const handleUnlock = async () => {
+    if (!unlockPassword) return;
+    setUnlocking(true);
+    setUnlockError('');
+    try {
+      const { token } = await adminUnlock(unlockPassword);
+      setAdminToken(token);
+      setUnlocked(true);
+      setShowUnlockInput(false);
+      setUnlockPassword('');
+    } catch (e) {
+      setUnlockError((e as Error).message);
+    } finally {
+      setUnlocking(false);
+    }
+  };
+
+  const handleLock = () => {
+    clearAdminToken();
+    setUnlocked(false);
+  };
 
   useEffect(() => {
     getConfig().then(c => {
@@ -64,8 +94,45 @@ export function Settings({ onBack, onSend }: Props) {
     <div className="ceremony" style={{ maxWidth: 720 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h1>Settings</h1>
-        <button className="btn btn-secondary" onClick={onBack}>Back</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {needsAdmin && unlocked && (
+            <button className="btn btn-secondary" onClick={handleLock} style={{ fontSize: 13 }}>Lock</button>
+          )}
+          <button className="btn btn-secondary" onClick={onBack}>Back</button>
+        </div>
       </div>
+
+      {/* Admin unlock bar */}
+      {isLocked && (
+        <div className="card" style={{ marginBottom: 16, borderColor: 'var(--accent)' }}>
+          {!showUnlockInput ? (
+            <button className="btn btn-primary btn-full" onClick={() => setShowUnlockInput(true)}>
+              Unlock Settings
+            </button>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="password"
+                  autoFocus
+                  value={unlockPassword}
+                  onChange={e => { setUnlockPassword(e.target.value); setUnlockError(''); }}
+                  onKeyDown={e => e.key === 'Enter' && handleUnlock()}
+                  placeholder="Admin password"
+                  style={{ flex: 1 }}
+                />
+                <button className="btn btn-primary" onClick={handleUnlock} disabled={unlocking || !unlockPassword}>
+                  {unlocking ? <span className="spinner" /> : 'Unlock'}
+                </button>
+                <button className="btn btn-secondary" onClick={() => { setShowUnlockInput(false); setUnlockPassword(''); setUnlockError(''); }}>
+                  Cancel
+                </button>
+              </div>
+              {unlockError && <div className="warning" style={{ marginTop: 8 }}>{unlockError}</div>}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Network */}
       <div className="card">
@@ -135,11 +202,12 @@ export function Settings({ onBack, onSend }: Props) {
       )}
 
       {/* Hosting */}
-      <HostingManager config={config} onConfigUpdate={setConfig} />
+      <HostingManager config={config} onConfigUpdate={setConfig} disabled={isLocked} />
 
       {/* Contracts */}
       <ContractManager
         contracts={config.contracts}
+        disabled={isLocked}
         onUpdate={(contracts) => {
           updateContracts(contracts).then(() => {
             setConfig(prev => prev ? { ...prev, contracts } : prev);
@@ -148,10 +216,10 @@ export function Settings({ onBack, onSend }: Props) {
       />
 
       {/* Reset */}
-      <div className="card">
+      <div className="card" style={isLocked ? { opacity: 0.5, pointerEvents: 'none' } : {}}>
         <h2>Reset Instance</h2>
         {resetStep === 0 && (
-          <button className="btn btn-secondary btn-full" style={{ color: 'var(--red)' }} onClick={handleReset}>
+          <button className="btn btn-secondary btn-full" style={{ color: 'var(--red)' }} onClick={handleReset} disabled={isLocked}>
             Reset Instance
           </button>
         )}
@@ -191,7 +259,7 @@ export function Settings({ onBack, onSend }: Props) {
 
 // ── Hosting Manager ──
 
-function HostingManager({ config, onConfigUpdate }: { config: VaultConfig; onConfigUpdate: (c: VaultConfig) => void }) {
+function HostingManager({ config, onConfigUpdate, disabled }: { config: VaultConfig; onConfigUpdate: (c: VaultConfig) => void; disabled?: boolean }) {
   const hosting = config.hosting;
   const [domain, setDomain] = useState(hosting?.domain || '');
   const [httpsEnabled, setHttpsEnabled] = useState(hosting?.httpsEnabled || false);
@@ -238,7 +306,7 @@ function HostingManager({ config, onConfigUpdate }: { config: VaultConfig; onCon
   };
 
   return (
-    <div className="card">
+    <div className="card" style={disabled ? { opacity: 0.5, pointerEvents: 'none' } : {}}>
       <h2>Hosting</h2>
       <p style={{ fontSize: 13, color: 'var(--white-dim)', marginBottom: 16 }}>
         Configure a domain for external access. HTTPS uses Let's Encrypt automatic certificates via Caddy.
@@ -308,7 +376,7 @@ function HostingManager({ config, onConfigUpdate }: { config: VaultConfig; onCon
 
 type ContractType = 'op20' | 'custom';
 
-function ContractManager({ contracts, onUpdate }: { contracts: ContractConfig[]; onUpdate: (c: ContractConfig[]) => void }) {
+function ContractManager({ contracts, onUpdate, disabled }: { contracts: ContractConfig[]; onUpdate: (c: ContractConfig[]) => void; disabled?: boolean }) {
   const [adding, setAdding] = useState(false);
   const [contractType, setContractType] = useState<ContractType>('op20');
   const [name, setName] = useState('');
@@ -373,7 +441,7 @@ function ContractManager({ contracts, onUpdate }: { contracts: ContractConfig[];
     : parsedAbiMethods;
 
   return (
-    <div className="card">
+    <div className="card" style={disabled ? { opacity: 0.5, pointerEvents: 'none' } : {}}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h2 style={{ marginBottom: 0 }}>Contracts</h2>
         {!adding && (

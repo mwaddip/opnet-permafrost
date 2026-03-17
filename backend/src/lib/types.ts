@@ -42,6 +42,7 @@ export interface VaultConfig {
   network: NetworkName;
   storageMode: StorageMode;
   setupState: SetupState;
+  adminPasswordHash?: string;
   wallet?: WalletConfig;
   permafrost?: PermafrostConfig;
   contracts: ContractConfig[];
@@ -63,10 +64,10 @@ export function defaultConfig(network: NetworkName, storageMode: StorageMode): V
   };
 }
 
-/** Sanitize config for frontend — strip private keys */
-export function sanitizeConfig(config: VaultConfig): Omit<VaultConfig, 'wallet'> & { wallet?: Omit<WalletConfig, 'mnemonic'> } {
-  const { wallet, ...rest } = config;
-  if (!wallet) return rest;
-  const { mnemonic: _, ...safeWallet } = wallet;
-  return { ...rest, wallet: safeWallet };
+/** Sanitize config for frontend — strip private keys and admin hash */
+export function sanitizeConfig(config: VaultConfig): Record<string, unknown> {
+  const { wallet, adminPasswordHash: _, ...rest } = config;
+  if (!wallet) return { ...rest, hasAdminPassword: !!config.adminPasswordHash };
+  const { mnemonic: _m, ...safeWallet } = wallet;
+  return { ...rest, wallet: safeWallet, hasAdminPassword: !!config.adminPasswordHash };
 }

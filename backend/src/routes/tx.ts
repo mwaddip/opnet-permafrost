@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Request, type Response, type RequestHandler } from 'express';
 import { createHash } from 'node:crypto';
 import { Address, BinaryWriter } from '@btc-vision/transaction';
 import { getContract, OP_20_ABI } from 'opnet';
@@ -6,7 +6,7 @@ import { ConfigStore } from '../lib/config-store.js';
 import { getProvider, getNetwork, generateWallet } from '../lib/opnet-client.js';
 import { ThresholdMLDSASigner } from '../lib/threshold-signer.js';
 
-export function txRoutes(store: ConfigStore): Router {
+export function txRoutes(store: ConfigStore, requireAdmin: RequestHandler): Router {
   const r = Router();
 
   // Broadcast lock: messageHash → result (prevents double-broadcast)
@@ -112,7 +112,7 @@ export function txRoutes(store: ConfigStore): Router {
   });
 
   /** POST /api/tx/broadcast — build tx with ML-DSA sig and broadcast */
-  r.post('/broadcast', async (req: Request, res: Response) => {
+  r.post('/broadcast', requireAdmin, async (req: Request, res: Response) => {
     const { contract: contractAddr, method, params: rawParams, paramTypes, abi, signature, messageHash } = req.body as {
       contract: string;
       method: string;

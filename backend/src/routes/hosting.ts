@@ -1,8 +1,9 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Request, type Response, type RequestHandler } from 'express';
 import { writeFileSync, existsSync } from 'node:fs';
 import { execSync, spawn } from 'node:child_process';
 import { ConfigStore } from '../lib/config-store.js';
 import { sanitizeConfig, type HostingConfig } from '../lib/types.js';
+
 
 const CADDYFILE = process.env.CADDYFILE_PATH || '/etc/caddy/Caddyfile';
 const BACKEND_PORT = parseInt(process.env.PORT || '8080', 10);
@@ -62,7 +63,7 @@ function reloadCaddy(): string | null {
   }
 }
 
-export function hostingRoutes(store: ConfigStore): Router {
+export function hostingRoutes(store: ConfigStore, requireAdmin: RequestHandler): Router {
   const r = Router();
 
   /** GET /api/hosting — current hosting config */
@@ -76,7 +77,7 @@ export function hostingRoutes(store: ConfigStore): Router {
   });
 
   /** POST /api/hosting — update domain + HTTPS settings */
-  r.post('/', (req: Request, res: Response) => {
+  r.post('/', requireAdmin, (req: Request, res: Response) => {
     const { domain, httpsEnabled } = req.body as {
       domain?: string;
       httpsEnabled?: boolean;
@@ -114,7 +115,7 @@ export function hostingRoutes(store: ConfigStore): Router {
   });
 
   /** DELETE /api/hosting — remove domain config, revert to default */
-  r.delete('/', (_req: Request, res: Response) => {
+  r.delete('/', requireAdmin, (_req: Request, res: Response) => {
     try {
       store.update({ hosting: undefined as never });
 

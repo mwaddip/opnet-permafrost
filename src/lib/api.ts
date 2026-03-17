@@ -6,12 +6,31 @@
 import type { VaultConfig, NetworkName, StorageMode, ContractConfig } from './vault-types.js';
 
 const BASE = '/api';
+const ADMIN_TOKEN_KEY = 'permafrost-admin-token';
+
+function getAdminToken(): string | null {
+  try { return sessionStorage.getItem(ADMIN_TOKEN_KEY); } catch { return null; }
+}
+
+export function setAdminToken(token: string): void {
+  try { sessionStorage.setItem(ADMIN_TOKEN_KEY, token); } catch { /* ignore */ }
+}
+
+export function clearAdminToken(): void {
+  try { sessionStorage.removeItem(ADMIN_TOKEN_KEY); } catch { /* ignore */ }
+}
+
+export function hasAdminToken(): boolean {
+  return !!getAdminToken();
+}
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...init,
-  });
+  const token = getAdminToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+  const res = await fetch(`${BASE}${path}`, { ...init, headers });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data as T;
@@ -31,10 +50,18 @@ export const getStatus = () => json<StatusResponse>('/status');
 
 // ── Init ──
 
-export const initInstance = (network: NetworkName, storageMode: StorageMode, password?: string) =>
+export const initInstance = (network: NetworkName, storageMode: StorageMode, password?: string, adminPassword?: string) =>
   json<{ ok: true }>('/init', {
     method: 'POST',
-    body: JSON.stringify({ network, storageMode, password }),
+    body: JSON.stringify({ network, storageMode, password, adminPassword }),
+  });
+
+// ── Admin ──
+
+export const adminUnlock = (password: string) =>
+  json<{ ok: true; token: string }>('/admin/unlock', {
+    method: 'POST',
+    body: JSON.stringify({ password }),
   });
 
 // ── Unlock ──

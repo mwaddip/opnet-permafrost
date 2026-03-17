@@ -13,14 +13,18 @@ export function InstallWizard({ onComplete }: Props) {
   const [storageMode, setStorageMode] = useState<StorageMode>('persistent');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminPasswordConfirm, setAdminPasswordConfirm] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleInit = async () => {
     if (storageMode === 'encrypted-persistent') {
-      if (!password) { setError('Password required'); return; }
-      if (password !== passwordConfirm) { setError('Passwords do not match'); return; }
+      if (!password) { setError('Encryption password required'); return; }
+      if (password !== passwordConfirm) { setError('Encryption passwords do not match'); return; }
     }
+    if (!adminPassword) { setError('Admin password required'); return; }
+    if (adminPassword !== adminPasswordConfirm) { setError('Admin passwords do not match'); return; }
     setLoading(true);
     setError('');
     try {
@@ -28,6 +32,7 @@ export function InstallWizard({ onComplete }: Props) {
         network,
         storageMode,
         storageMode === 'encrypted-persistent' ? password : undefined,
+        adminPassword,
       );
       onComplete();
     } catch (e) {
@@ -108,18 +113,36 @@ export function InstallWizard({ onComplete }: Props) {
             <div style={{ marginBottom: 16 }}>
               <div className="form-row">
                 <label>
-                  Password
+                  Encryption Password
                   <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Choose a strong password" />
                 </label>
               </div>
               <div className="form-row">
                 <label>
-                  Confirm Password
+                  Confirm Encryption Password
                   <input type="password" value={passwordConfirm} onChange={e => setPasswordConfirm(e.target.value)} placeholder="Confirm password" />
                 </label>
               </div>
             </div>
           )}
+
+          <div style={{ marginBottom: 16 }}>
+            <p style={{ fontSize: 13, color: 'var(--white-dim)', marginBottom: 8 }}>
+              Admin password protects settings changes, contract management, and transaction broadcasting.
+            </p>
+            <div className="form-row">
+              <label>
+                Admin Password
+                <input type="password" value={adminPassword} onChange={e => setAdminPassword(e.target.value)} placeholder="Choose an admin password" />
+              </label>
+            </div>
+            <div className="form-row">
+              <label>
+                Confirm Admin Password
+                <input type="password" value={adminPasswordConfirm} onChange={e => setAdminPasswordConfirm(e.target.value)} placeholder="Confirm admin password" />
+              </label>
+            </div>
+          </div>
 
           {error && <div className="warning">{error}</div>}
 

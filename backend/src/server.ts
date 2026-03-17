@@ -3,6 +3,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ConfigStore } from './lib/config-store.js';
+import { createRequireAdmin } from './lib/auth.js';
 import { configRoutes } from './routes/config.js';
 import { walletRoutes } from './routes/wallet.js';
 import { txRoutes } from './routes/tx.js';
@@ -21,12 +22,15 @@ app.use(express.json({ limit: '10mb' }));
 // Try to auto-load persistent config on startup
 try { store.load(); } catch { /* not initialized or encrypted — that's fine */ }
 
+// Admin auth middleware
+const requireAdmin = createRequireAdmin(store);
+
 // API routes
-app.use('/api', configRoutes(store));
-app.use('/api/wallet', walletRoutes(store));
-app.use('/api/tx', txRoutes(store));
+app.use('/api', configRoutes(store, requireAdmin));
+app.use('/api/wallet', walletRoutes(store, requireAdmin));
+app.use('/api/tx', txRoutes(store, requireAdmin));
 app.use('/api/balances', balanceRoutes(store));
-app.use('/api/hosting', hostingRoutes(store));
+app.use('/api/hosting', hostingRoutes(store, requireAdmin));
 
 // Proxy WebSocket to relay
 const wsProxy = createProxyMiddleware({

@@ -1,13 +1,13 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Request, type Response, type RequestHandler } from 'express';
 import { ConfigStore } from '../lib/config-store.js';
 import { generateWallet, generateMnemonic, getProvider } from '../lib/opnet-client.js';
 import { sanitizeConfig } from '../lib/types.js';
 
-export function walletRoutes(store: ConfigStore): Router {
+export function walletRoutes(store: ConfigStore, requireAdmin: RequestHandler): Router {
   const r = Router();
 
   /** POST /api/wallet/generate — create BTC keypair, save to config */
-  r.post('/generate', (req: Request, res: Response) => {
+  r.post('/generate', requireAdmin, (req: Request, res: Response) => {
     try {
       const config = store.get();
       const phrase = generateMnemonic();
@@ -36,7 +36,7 @@ export function walletRoutes(store: ConfigStore): Router {
   });
 
   /** POST /api/wallet/skip — mark wallet as skipped */
-  r.post('/skip', (req: Request, res: Response) => {
+  r.post('/skip', requireAdmin, (req: Request, res: Response) => {
     const { dontShowAgain } = req.body as { dontShowAgain?: boolean };
     try {
       const config = store.get();

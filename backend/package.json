@@ -13,7 +13,7 @@
     "@btc-vision/transaction": "^1.8.2",
     "express": "^4.21.0",
     "http-proxy-middleware": "^3.0.0",
-    "opnet": "^1.8.5"
+    "opnet": "^1.8.6"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
