@@ -5,11 +5,12 @@ import { DKGWizard } from './components/DKGWizard';
 import { SigningPage } from './components/SigningPage';
 import { Settings } from './components/Settings';
 import { getStatus } from './lib/api';
+import { WalletAuth } from './components/WalletAuth';
 import { toggleTheme, getTheme } from './lib/theme';
 import './styles/global.css';
 import './styles/ceremony.css';
 
-type View = 'loading' | 'wizard' | 'unlock' | 'wallet' | 'dkg' | 'signing' | 'settings';
+type View = 'loading' | 'wizard' | 'unlock' | 'walletAuth' | 'wallet' | 'dkg' | 'signing' | 'settings';
 
 export interface SendPrefill {
   contractAddress: string;
@@ -107,6 +108,20 @@ export function App() {
       } else if (status.state === 'locked') {
         setView('unlock');
       } else if (status.setupState) {
+        // Check wallet auth
+        if (status.authMode === 'wallet') {
+          try {
+            const { getAuthMe } = await import('./lib/api');
+            const me = await getAuthMe();
+            if (!me.authenticated) {
+              setView('walletAuth');
+              return;
+            }
+          } catch {
+            setView('walletAuth');
+            return;
+          }
+        }
         if (!status.setupState.walletSkipped && !status.walletConfigured && !status.setupState.walletDontShowAgain) {
           setView('wallet');
         } else if (!status.setupState.dkgComplete) {
@@ -135,6 +150,10 @@ export function App() {
 
   if (view === 'unlock') {
     return <UnlockScreen onUnlocked={handleSetupComplete} />;
+  }
+
+  if (view === 'walletAuth') {
+    return <WalletAuth onAuthenticated={() => checkStatus()} />;
   }
 
   if (view === 'wallet') {
