@@ -26,6 +26,8 @@ WORKDIR /app
 COPY --from=frontend-build /app/dist ./dist
 COPY --from=backend-build /app/dist ./backend
 COPY --from=backend-build /app/node_modules ./backend/node_modules
+RUN rm -rf backend/node_modules/@btc-vision/post-quantum 2>/dev/null; true
+COPY --from=backend-build /vendor/post-quantum ./backend/node_modules/@btc-vision/post-quantum
 COPY --from=relay-build /relay /usr/local/bin/relay
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

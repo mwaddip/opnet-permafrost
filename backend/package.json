@@ -12,6 +12,8 @@
     "@btc-vision/bitcoin": "^7.0.0",
     "@btc-vision/post-quantum": "file:../vendor/post-quantum",
     "@btc-vision/transaction": "^1.8.2",
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
     "express": "^4.21.0",
     "http-proxy-middleware": "^3.0.0",
     "opnet": "^1.8.6"
