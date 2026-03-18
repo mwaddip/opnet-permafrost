@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { getConfig, getWalletBalance, getBalances, resetInstance, updateContracts, updateHosting, removeHosting, adminUnlock, setAdminToken, clearAdminToken, hasAdminToken } from '../lib/api';
+import { getConfig, getWalletBalance, getBalances, resetInstance, updateContracts, updateHosting, removeHosting, adminUnlock, setAdminToken, clearAdminToken, hasAdminToken, getSessionRole } from '../lib/api';
+import { UserManager } from './UserManager';
 import { OP20_METHODS } from '../lib/op20-methods';
 import type { VaultConfig, ContractConfig } from '../lib/vault-types';
 import type { SendPrefill } from '../App';
@@ -40,8 +41,11 @@ export function Settings({ onBack, onSend }: Props) {
   const [unlocking, setUnlocking] = useState(false);
   const [showUnlockInput, setShowUnlockInput] = useState(false);
 
+  const sessionRole = getSessionRole();
+  const isWalletAuth = config?.authMode === 'wallet';
+
   const needsAdmin = config?.hasAdminPassword ?? false;
-  const isLocked = needsAdmin && !unlocked;
+  const isLocked = isWalletAuth ? sessionRole !== 'admin' : (needsAdmin && !unlocked);
 
   const handleUnlock = async () => {
     if (!unlockPassword) return;
@@ -103,7 +107,7 @@ export function Settings({ onBack, onSend }: Props) {
       </div>
 
       {/* Admin unlock bar */}
-      {isLocked && (
+      {isLocked && !isWalletAuth && (
         <div className="card" style={{ marginBottom: 16, borderColor: 'var(--accent)' }}>
           {!showUnlockInput ? (
             <button className="btn btn-primary btn-full" onClick={() => setShowUnlockInput(true)}>
@@ -214,6 +218,8 @@ export function Settings({ onBack, onSend }: Props) {
           }).catch(e => setError((e as Error).message));
         }}
       />
+
+      {isWalletAuth && sessionRole === 'admin' && <UserManager />}
 
       {/* Reset */}
       <div className="card" style={isLocked ? { opacity: 0.5, pointerEvents: 'none' } : {}}>
