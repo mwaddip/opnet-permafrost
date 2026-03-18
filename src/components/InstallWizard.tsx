@@ -8,7 +8,10 @@ interface Props {
 }
 
 export function InstallWizard({ onComplete }: Props) {
-  const [step, setStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [authMode, setAuthMode] = useState<'password' | 'wallet'>('password');
+  const [walletAddress, setWalletAddress] = useState('');
+  const [walletConnecting, setWalletConnecting] = useState(false);
   const [network, setNetwork] = useState<NetworkName>('testnet');
   const [storageMode, setStorageMode] = useState<StorageMode>('persistent');
   const [password, setPassword] = useState('');
@@ -23,8 +26,10 @@ export function InstallWizard({ onComplete }: Props) {
       if (!password) { setError('Encryption password required'); return; }
       if (password !== passwordConfirm) { setError('Encryption passwords do not match'); return; }
     }
-    if (!adminPassword) { setError('Admin password required'); return; }
-    if (adminPassword !== adminPasswordConfirm) { setError('Admin passwords do not match'); return; }
+    if (authMode === 'password') {
+      if (!adminPassword) { setError('Admin password required'); return; }
+      if (adminPassword !== adminPasswordConfirm) { setError('Admin passwords do not match'); return; }
+    }
     setLoading(true);
     setError('');
     try {
@@ -32,7 +37,10 @@ export function InstallWizard({ onComplete }: Props) {
         network,
         storageMode,
         storageMode === 'encrypted-persistent' ? password : undefined,
-        adminPassword,
+        authMode === 'password' ? adminPassword : undefined,
+        authMode,
+        authMode === 'wallet' ? walletAddress : undefined,
+        authMode === 'wallet' ? 'Admin' : undefined,
       );
       onComplete();
     } catch (e) {
@@ -52,6 +60,7 @@ export function InstallWizard({ onComplete }: Props) {
       <div className="steps">
         <div className={`step-dot ${step >= 1 ? 'active' : ''}`} />
         <div className={`step-dot ${step >= 2 ? 'active' : ''}`} />
+        <div className={`step-dot ${step >= 3 ? 'active' : ''}`} />
       </div>
 
       {step === 1 && (
@@ -74,6 +83,67 @@ export function InstallWizard({ onComplete }: Props) {
       )}
 
       {step === 2 && (
+        <div className="card">
+          <h2>Authentication</h2>
+          <p>How should this instance control access?</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
+            {([
+              ['password', 'Admin Password', 'Protect settings with a password. Simple setup.'],
+              ['wallet', 'OPWallet (ML-DSA)', 'Authenticate with OPWallet signatures. Role-based access for multiple users.'],
+            ] as const).map(([value, label, desc]) => (
+              <label key={value} style={{
+                display: 'flex', alignItems: 'flex-start', gap: 12, padding: 12,
+                background: authMode === value ? 'var(--accent-dim)' : 'var(--bg-raised)',
+                borderRadius: 'var(--radius)', cursor: 'pointer',
+                border: authMode === value ? '1px solid var(--accent)' : '1px solid rgba(237,239,242,0.06)',
+              }}>
+                <input type="radio" name="authMode" value={value} checked={authMode === value}
+                  onChange={() => setAuthMode(value)} style={{ marginTop: 4 }} />
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{label}</div>
+                  <div style={{ fontSize: 13, color: 'var(--white-dim)' }}>{desc}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+
+          {authMode === 'wallet' && !walletAddress && (
+            <button className="btn btn-primary btn-full" onClick={async () => {
+              const wallet = (window as unknown as { opnet?: { requestAccounts(): Promise<string[]> } }).opnet;
+              if (!wallet) { setError('OPWallet not detected'); return; }
+              setWalletConnecting(true);
+              try {
+                const accounts = await wallet.requestAccounts();
+                if (accounts?.length) setWalletAddress(accounts[0]!);
+              } catch { setError('Wallet connection rejected'); }
+              setWalletConnecting(false);
+            }} disabled={walletConnecting}>
+              {walletConnecting ? <span className="spinner" /> : 'Connect OPWallet'}
+            </button>
+          )}
+
+          {authMode === 'wallet' && walletAddress && (
+            <div style={{ padding: 12, background: 'var(--bg-raised)', borderRadius: 'var(--radius)', fontSize: 13 }}>
+              <div style={{ color: 'var(--green)', marginBottom: 4 }}>Wallet connected</div>
+              <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--white-dim)' }}>{walletAddress}</div>
+              <div style={{ fontSize: 12, marginTop: 4 }}>This wallet will be the first admin.</div>
+            </div>
+          )}
+
+          {error && <div className="warning">{error}</div>}
+
+          <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
+            <button className="btn btn-secondary" onClick={() => setStep(1)}>Back</button>
+            <button className="btn btn-primary" style={{ flex: 1 }}
+              onClick={() => { setError(''); setStep(3); }}
+              disabled={authMode === 'wallet' && !walletAddress}>
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === 3 && (
         <div className="card">
           <h2>Storage Mode</h2>
           <p>How should this instance store sensitive data (wallet keys, DKG shares)?</p>
@@ -126,28 +196,30 @@ export function InstallWizard({ onComplete }: Props) {
             </div>
           )}
 
-          <div style={{ marginBottom: 16 }}>
-            <p style={{ fontSize: 13, color: 'var(--white-dim)', marginBottom: 8 }}>
-              Admin password protects settings changes, contract management, and transaction broadcasting.
-            </p>
-            <div className="form-row">
-              <label>
-                Admin Password
-                <input type="password" value={adminPassword} onChange={e => setAdminPassword(e.target.value)} placeholder="Choose an admin password" />
-              </label>
+          {authMode === 'password' && (
+            <div style={{ marginBottom: 16 }}>
+              <p style={{ fontSize: 13, color: 'var(--white-dim)', marginBottom: 8 }}>
+                Admin password protects settings changes, contract management, and transaction broadcasting.
+              </p>
+              <div className="form-row">
+                <label>
+                  Admin Password
+                  <input type="password" value={adminPassword} onChange={e => setAdminPassword(e.target.value)} placeholder="Choose an admin password" />
+                </label>
+              </div>
+              <div className="form-row">
+                <label>
+                  Confirm Admin Password
+                  <input type="password" value={adminPasswordConfirm} onChange={e => setAdminPasswordConfirm(e.target.value)} placeholder="Confirm admin password" />
+                </label>
+              </div>
             </div>
-            <div className="form-row">
-              <label>
-                Confirm Admin Password
-                <input type="password" value={adminPasswordConfirm} onChange={e => setAdminPasswordConfirm(e.target.value)} placeholder="Confirm admin password" />
-              </label>
-            </div>
-          </div>
+          )}
 
           {error && <div className="warning">{error}</div>}
 
           <div style={{ display: 'flex', gap: 12 }}>
-            <button className="btn btn-secondary" onClick={() => setStep(1)}>Back</button>
+            <button className="btn btn-secondary" onClick={() => setStep(2)}>Back</button>
             <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleInit} disabled={loading}>
               {loading ? <span className="spinner" /> : 'Initialize'}
             </button>
