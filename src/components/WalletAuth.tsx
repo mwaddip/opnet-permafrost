@@ -1,0 +1,200 @@
+import { useState, useCallback } from 'react';
+import { getChallenge, verifyAuth, redeemInvite, setAdminToken, setSessionRole } from '../lib/api';
+import { OtziWordmark } from '../App';
+
+interface OPNetWallet {
+  requestAccounts(): Promise<string[]>;
+  web3: {
+    signMLDSAMessage(messageHex: string): Promise<{ signature: string; publicKey: string }>;
+  };
+}
+
+declare global {
+  interface Window {
+    opnet?: OPNetWallet;
+  }
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  if (hex.startsWith('0x')) hex = hex.slice(2);
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+  return bytes;
+}
+
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+  return btoa(binary);
+}
+
+interface Props {
+  onAuthenticated: (role: string, address: string) => void;
+}
+
+export function WalletAuth({ onAuthenticated }: Props) {
+  const [step, setStep] = useState<'connect' | 'signing' | 'invite'>('connect');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [walletAddress, setWalletAddress] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
+  const [inviteLabel, setInviteLabel] = useState('');
+
+  const signChallenge = useCallback(async () => {
+    const wallet = window.opnet;
+    if (!wallet) {
+      setError('OPWallet not detected. Install the OPWallet browser extension.');
+      return null;
+    }
+
+    const { challenge } = await getChallenge();
+
+    // Construct message and double-hash per OPWallet convention
+    const message = `PERMAFROST auth ${challenge}`;
+    const msgBytes = new TextEncoder().encode(message);
+    const hashBuf = await crypto.subtle.digest('SHA-256', msgBytes);
+    const messageHex = bytesToHex(new Uint8Array(hashBuf));
+
+    // Sign with ML-DSA via OPWallet
+    const signed = await wallet.web3.signMLDSAMessage(messageHex);
+
+    // Convert hex sig/pubkey to base64 for the backend
+    const signature = uint8ToBase64(hexToBytes(signed.signature));
+    const publicKey = uint8ToBase64(hexToBytes(signed.publicKey));
+
+    return { challenge, signature, publicKey };
+  }, []);
+
+  const handleConnect = async () => {
+    setError('');
+    setLoading(true);
+    try {
+      const wallet = window.opnet;
+      if (!wallet) {
+        setError('OPWallet not detected. Install the OPWallet browser extension.');
+        return;
+      }
+
+      const accounts = await wallet.requestAccounts();
+      if (!accounts?.length) { setError('No accounts returned'); return; }
+      setWalletAddress(accounts[0]!);
+      setStep('signing');
+
+      const auth = await signChallenge();
+      if (!auth) return;
+
+      const result = await verifyAuth(auth.challenge, auth.signature, auth.publicKey);
+
+      if (result.authenticated && result.token && result.role) {
+        setAdminToken(result.token);
+        setSessionRole(result.role);
+        onAuthenticated(result.role, result.address || '');
+      } else if (result.needsInvite) {
+        setStep('invite');
+      } else {
+        setError('Authentication failed');
+        setStep('connect');
+      }
+    } catch (e) {
+      setError((e as Error).message);
+      setStep('connect');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRedeem = async () => {
+    if (!inviteCode) return;
+    setError('');
+    setLoading(true);
+    try {
+      const auth = await signChallenge();
+      if (!auth) return;
+
+      const result = await redeemInvite(
+        auth.challenge, auth.signature, auth.publicKey,
+        inviteCode, inviteLabel || undefined,
+      );
+
+      if (result.authenticated && result.token && result.role) {
+        setAdminToken(result.token);
+        setSessionRole(result.role);
+        onAuthenticated(result.role, result.address || '');
+      } else {
+        setError('Invalid, expired, or exhausted invite code');
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="ceremony">
+      <div style={{ textAlign: 'center', marginBottom: 8 }}>
+        <OtziWordmark height={48} />
+      </div>
+
+      {step === 'connect' && (
+        <div className="card" style={{ textAlign: 'center' }}>
+          <p style={{ marginBottom: 16 }}>Connect your OPWallet to authenticate</p>
+          {error && <div className="warning" style={{ marginBottom: 12 }}>{error}</div>}
+          <button className="btn btn-primary btn-full" onClick={handleConnect} disabled={loading}>
+            {loading ? <span className="spinner" /> : 'Connect OPWallet'}
+          </button>
+        </div>
+      )}
+
+      {step === 'signing' && (
+        <div className="card" style={{ textAlign: 'center' }}>
+          <div className="spinner" style={{ margin: '0 auto 16px' }} />
+          <p>Signing challenge with OPWallet...</p>
+          <p style={{ fontSize: 12, color: 'var(--white-dim)', fontFamily: 'monospace' }}>{walletAddress}</p>
+        </div>
+      )}
+
+      {step === 'invite' && (
+        <div className="card">
+          <h2>Invite Code Required</h2>
+          <p style={{ fontSize: 13, color: 'var(--white-dim)', marginBottom: 16 }}>
+            Your wallet is not registered. Enter an invite code to gain access.
+          </p>
+          <div className="form-row">
+            <label>
+              Invite Code
+              <input
+                autoFocus
+                value={inviteCode}
+                onChange={e => setInviteCode(e.target.value.toUpperCase())}
+                placeholder="e.g. X7K2M9"
+                style={{ fontFamily: 'monospace', textTransform: 'uppercase' }}
+              />
+            </label>
+          </div>
+          <div className="form-row">
+            <label>
+              Display Name (optional)
+              <input
+                value={inviteLabel}
+                onChange={e => setInviteLabel(e.target.value)}
+                placeholder="Your name"
+              />
+            </label>
+          </div>
+          {error && <div className="warning" style={{ marginBottom: 12 }}>{error}</div>}
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button className="btn btn-secondary" onClick={() => { setStep('connect'); setError(''); }}>Back</button>
+            <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleRedeem} disabled={loading || !inviteCode}>
+              {loading ? <span className="spinner" /> : 'Submit'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
