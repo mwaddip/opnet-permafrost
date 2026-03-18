@@ -51,9 +51,12 @@ export function InstallWizard({ onComplete }: Props) {
     setError('');
     try {
       await wallet.requestAccounts();
-      // Sign a dummy message to extract the ML-DSA public key
-      // We only need the pubkey to derive the wallet address
-      const signed = await wallet.web3.signMLDSAMessage('00'.repeat(32));
+      // Sign a registration message to extract the ML-DSA public key
+      const regMessage = 'PERMAFROST admin registration';
+      const regBytes = new TextEncoder().encode(regMessage);
+      const regHash = await crypto.subtle.digest('SHA-256', regBytes);
+      const regHex = bytesToHex(new Uint8Array(regHash));
+      const signed = await wallet.web3.signMLDSAMessage(regHex);
       const pubKeyBytes = hexToBytes(signed.publicKey);
       // walletAddress = 0x + hex(SHA256(mldsaPubKey)) — NOT p2tr/tweakedPubKey
       const hashBuf = await crypto.subtle.digest('SHA-256', pubKeyBytes.buffer as ArrayBuffer);
