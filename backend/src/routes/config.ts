@@ -85,7 +85,7 @@ export function configRoutes(store: ConfigStore, requireAdmin: RequestHandler): 
         res.status(401).json({ error: 'Wrong admin password' });
         return;
       }
-      const token = createToken();
+      const token = createToken('password-admin');
       res.json({ ok: true, token });
     } catch (e) {
       res.status(503).json({ error: (e as Error).message });
