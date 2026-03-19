@@ -255,6 +255,11 @@ export const readContract = (contract: string, method: string, abi?: unknown[]) 
 export const getBlockHeight = () =>
   json<{ height: number }>('/tx/block-height');
 
+// ── Relay ──
+
+export const getActiveSessions = () =>
+  json<{ active: number }>('/relay/sessions');
+
 // ── Reset ──
 
 export const resetInstance = () =>

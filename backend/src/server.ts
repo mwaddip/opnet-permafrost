@@ -39,6 +39,17 @@ app.use('/api/tx', txRoutes(store, requireUser, requireAdmin));
 app.use('/api/balances', balanceRoutes(store, requireRead));
 app.use('/api/hosting', hostingRoutes(store, requireAdmin, requireRead));
 
+// Relay session count (proxied from relay /sessions endpoint)
+app.get('/api/relay/sessions', async (_req, res) => {
+  try {
+    const resp = await fetch(`http://127.0.0.1:${RELAY_PORT}/sessions`);
+    const data = await resp.json();
+    res.json(data);
+  } catch {
+    res.json({ active: 0 });
+  }
+});
+
 // Proxy WebSocket to relay
 const wsProxy = createProxyMiddleware({
   target: `http://127.0.0.1:${RELAY_PORT}`,

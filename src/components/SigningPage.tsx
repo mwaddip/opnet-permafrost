@@ -3,7 +3,7 @@ import { MessageBuilder, type MessageMeta } from './MessageBuilder';
 import { ShareImport, ThresholdSign } from './ThresholdSign';
 import { ManifestView } from './ManifestView';
 import { RelayClient } from '../lib/relay';
-import { getConfig, getWalletBalance, broadcastTx, getBroadcastStatus, getSessionRole, hasAdminToken } from '../lib/api';
+import { getConfig, getWalletBalance, broadcastTx, getBroadcastStatus, getSessionRole, hasAdminToken, getActiveSessions } from '../lib/api';
 import { toHex } from '../lib/threshold';
 import type { VaultConfig } from '../lib/vault-types';
 import type { ManifestConfig } from '../lib/manifest-types';
@@ -64,6 +64,15 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
       setPhase('sign');
     }
   }, [initialSessionCode]);
+
+  // Check for active relay sessions (show/hide session code input)
+  const [hasActiveSessions, setHasActiveSessions] = useState(!!initialSessionCode);
+  useEffect(() => {
+    const check = () => getActiveSessions().then(r => setHasActiveSessions(r.active > 0)).catch(() => {});
+    check();
+    const interval = setInterval(check, 10_000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Poll balance every 30s if wallet is configured
   useEffect(() => {
@@ -309,8 +318,8 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
       {/* Build phase */}
       {phase === 'build' && (
         <>
-          {/* Session code join — only when DKG is complete (signing possible) */}
-          {config.permafrost && (
+          {/* Session code join — only when relay has active sessions */}
+          {hasActiveSessions && (
             <div className="card" style={{ marginBottom: 16 }}>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input

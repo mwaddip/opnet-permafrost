@@ -64,6 +64,13 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"ok"}`)
 	})
+	mux.HandleFunc("/sessions", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		hub.mu.RLock()
+		count := len(hub.sessions)
+		hub.mu.RUnlock()
+		fmt.Fprintf(w, `{"active":%d}`, count)
+	})
 
 	srv := &http.Server{Addr: *addr, Handler: mux}
 
