@@ -41,15 +41,17 @@ export function ManifestView({ config, onExecute, disabled, isAdmin }: Props) {
             {manifest.status.map(entry => {
               const readDef = manifest.reads?.[entry.read];
               const value = reads[entry.read];
+              const conditionMet = !entry.condition || evaluateCondition(entry.condition, reads, currentBlock);
+              const display = !conditionMet ? 'N/A'
+                : value !== undefined ? formatReadValue(value, readDef?.format, entry.map)
+                : '—';
               return (
                 <div key={entry.read}>
                   <div style={{ fontSize: 11, color: 'var(--gray-light)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                     {entry.label}
                   </div>
-                  <div style={{ fontSize: 15, fontWeight: 600, fontFamily: 'monospace', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={value !== undefined ? formatReadValue(value, readDef?.format, entry.map) : ''}>
-                    {value !== undefined
-                      ? formatReadValue(value, readDef?.format, entry.map)
-                      : '—'}
+                  <div style={{ fontSize: 15, fontWeight: 600, fontFamily: 'monospace', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: !conditionMet ? 'var(--gray)' : undefined }} title={display}>
+                    {display}
                   </div>
                 </div>
               );

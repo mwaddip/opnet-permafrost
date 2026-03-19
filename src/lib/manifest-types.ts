@@ -35,6 +35,7 @@ export interface ManifestStatusEntry {
   label: string;
   read: string;
   map?: Record<string, string>;
+  condition?: ManifestCondition;
 }
 
 export interface ManifestOperation {
