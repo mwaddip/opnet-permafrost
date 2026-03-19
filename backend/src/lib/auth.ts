@@ -30,7 +30,7 @@ interface TokenInfo {
 }
 
 const tokens = new Map<string, TokenInfo>();
-const TOKEN_EXPIRY = 60 * 60 * 1000; // 1 hour
+const TOKEN_EXPIRY = 6 * 60 * 60 * 1000; // 6 hours
 
 export function createToken(role: TokenInfo['role'], address?: string): string {
   const token = randomBytes(32).toString('hex');
