@@ -190,7 +190,7 @@ export function App() {
   } else if (view === 'settings') {
     content = <Settings onBack={() => setView('signing')} onSend={(prefill) => { setSendPrefill(prefill); setView('signing'); }} />;
   } else {
-    content = <SigningPage onSettings={() => setView('settings')} prefill={sendPrefill} onPrefillConsumed={() => setSendPrefill(null)} />;
+    content = <SigningPage onSettings={() => setView('settings')} prefill={sendPrefill} onPrefillConsumed={() => setSendPrefill(null)} initialSessionCode={pendingSessionCode} />;
   }
 
   return (

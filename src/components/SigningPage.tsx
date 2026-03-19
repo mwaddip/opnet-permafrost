@@ -19,12 +19,13 @@ interface Props {
   onSettings: () => void;
   prefill?: SendPrefill | null;
   onPrefillConsumed?: () => void;
+  initialSessionCode?: string | null;
 }
 
 type Phase = 'build' | 'sign' | 'result';
 type RelayState = 'none' | 'creating' | 'joining' | 'waiting' | 'ready';
 
-export function SigningPage({ onSettings, prefill, onPrefillConsumed }: Props) {
+export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSessionCode }: Props) {
   const [config, setConfig] = useState<VaultConfig | null>(null);
   const [balance, setBalance] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>('build');
@@ -43,7 +44,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed }: Props) {
   const [relaySessionCode, setRelaySessionCode] = useState('');
   const [relayJoinCode, setRelayJoinCode] = useState('');
   const [relayError, setRelayError] = useState('');
-  const [pendingJoinCode, setPendingJoinCode] = useState('');
+  const [pendingJoinCode, setPendingJoinCode] = useState(initialSessionCode || '');
   const [relayPartyCount, setRelayPartyCount] = useState(0);
   const [relayPartyTotal, setRelayPartyTotal] = useState(0);
   const [relayReady, setRelayReady] = useState(false);
@@ -55,6 +56,14 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed }: Props) {
   useEffect(() => {
     getConfig().then(setConfig).catch(console.error);
   }, []);
+
+  // Auto-join if initial session code was provided (e.g. from WalletAuth)
+  useEffect(() => {
+    if (initialSessionCode && initialSessionCode.length >= 6 && phase === 'build') {
+      setIsInitiator(false);
+      setPhase('sign');
+    }
+  }, [initialSessionCode]);
 
   // Poll balance every 30s if wallet is configured
   useEffect(() => {
@@ -300,6 +309,28 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed }: Props) {
       {/* Build phase */}
       {phase === 'build' && (
         <>
+          {/* Session code join — at the top since most users are joiners */}
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                autoFocus
+                value={pendingJoinCode}
+                onChange={e => {
+                  const val = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                  setPendingJoinCode(val);
+                  if (val.length >= 6) {
+                    setIsInitiator(false);
+                    setPhase('sign');
+                  }
+                }}
+                placeholder="Paste session code to join"
+                maxLength={6}
+                style={{ flex: 1, letterSpacing: '0.15em', fontSize: 18, textAlign: 'center', textTransform: 'uppercase', fontFamily: 'monospace' }}
+                onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
+              />
+            </div>
+          </div>
+
           {config.manifestConfig && (config.manifestConfig as ManifestConfig).addresses &&
             Object.values((config.manifestConfig as ManifestConfig).addresses).some(a => a) && (
             <ManifestView
@@ -326,43 +357,6 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed }: Props) {
             prefill={prefill}
             onPrefillConsumed={onPrefillConsumed}
           />
-
-          {/* Divider */}
-          <div style={{ textAlign: 'center', fontSize: 13, color: 'var(--gray-light)', margin: '16px 0' }}>
-            or join an existing signing session
-          </div>
-
-          {/* Session code join — other parties paste the code here */}
-          <div className="card">
-            <h2>Join Signing Session</h2>
-            <p style={{ fontSize: 13, color: 'var(--white-dim)', marginBottom: 12 }}>
-              Paste the session code shared by the initiating party.
-            </p>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input
-                autoFocus
-                value={pendingJoinCode}
-                onChange={e => {
-                  const val = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-                  setPendingJoinCode(val);
-                  if (val.length >= 6) {
-                    setIsInitiator(false);
-                    setPhase('sign');
-                  }
-                }}
-                placeholder="Session code"
-                style={{ flex: 1, letterSpacing: 2, fontSize: 16, textAlign: 'center' }}
-                onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
-              />
-              <button
-                className="btn btn-primary"
-                onClick={handleJoinSession}
-                disabled={pendingJoinCode.length < 6}
-              >
-                Join
-              </button>
-            </div>
-          </div>
         </>
       )}
 
