@@ -59,7 +59,7 @@ export function ManifestImport({ disabled }: Props) {
         setAddresses(newAddresses);
         setSettings(newSettings);
         setError('');
-        setMessage(`Loaded "${result.manifest.name}" — configure contract addresses below.`);
+        setMessage(`Loaded "${result.manifest.name}" — configure contract addresses and save.`);
       } catch (e) {
         setError((e as Error).message);
       }
