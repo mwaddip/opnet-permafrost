@@ -3,7 +3,7 @@ import { MessageBuilder, type MessageMeta } from './MessageBuilder';
 import { ShareImport, ThresholdSign } from './ThresholdSign';
 import { ManifestView } from './ManifestView';
 import { RelayClient } from '../lib/relay';
-import { getConfig, getWalletBalance, broadcastTx, getBroadcastStatus } from '../lib/api';
+import { getConfig, getWalletBalance, broadcastTx, getBroadcastStatus, getSessionRole, hasAdminToken } from '../lib/api';
 import { toHex } from '../lib/threshold';
 import type { VaultConfig } from '../lib/vault-types';
 import type { ManifestConfig } from '../lib/manifest-types';
@@ -305,6 +305,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed }: Props) {
             Object.values((config.manifestConfig as ManifestConfig).addresses).some(a => a) && (
             <ManifestView
               config={config.manifestConfig as ManifestConfig}
+              isAdmin={config.authMode === 'wallet' ? getSessionRole() === 'admin' : hasAdminToken()}
               onExecute={(contractAddr, method, params, paramTypes, messageHash, msgBytes) => {
                 setMessageMeta({
                   contractAddress: contractAddr,

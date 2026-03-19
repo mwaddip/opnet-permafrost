@@ -7,15 +7,17 @@ interface Props {
   config: ManifestConfig;
   onExecute: (contractAddress: string, method: string, params: string[], paramTypes: Array<'address' | 'u256' | 'bytes'>, messageHash: string, message: Uint8Array) => void;
   disabled?: boolean;
+  isAdmin?: boolean;
 }
 
-export function ManifestView({ config, onExecute, disabled }: Props) {
-  const { reads, loading } = useManifestState(config);
+export function ManifestView({ config, onExecute, disabled, isAdmin }: Props) {
+  const { reads, currentBlock, loading } = useManifestState(config);
 
   const manifest = config.manifest;
   const visibleOps = manifest.operations.filter(op => {
+    if (op.ownerOnly && !isAdmin) return false;
     if (!op.condition) return true;
-    return evaluateCondition(op.condition, reads);
+    return evaluateCondition(op.condition, reads, currentBlock);
   });
 
   return (

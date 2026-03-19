@@ -47,7 +47,9 @@ export function OperationCard({ operation, config, reads, onExecute, disabled }:
         if (!raw && !p.source) { setError(`${p.label || p.name} is required`); setLoading(false); return; }
         const encoded = encodeParamValue(raw, p);
         params.push(encoded);
-        paramTypes.push(p.type === 'uint256' ? 'u256' : p.type as 'address' | 'bytes');
+        const mappedType = p.type === 'uint256' ? 'u256' : p.type === 'bool' ? 'u256' : p.type as 'address' | 'bytes';
+        if (p.type === 'bool') params[params.length - 1] = raw === 'true' || raw === '1' ? '1' : '0';
+        paramTypes.push(mappedType);
       }
 
       const result = await encodeTx(operation.method, params, paramTypes);

@@ -12,6 +12,18 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
   // Broadcast lock: messageHash → result (prevents double-broadcast)
   const broadcastResults = new Map<string, { transactionId?: string; estimatedFees?: string; error?: string }>();
 
+  /** GET /api/tx/block-height — current block height */
+  r.get('/block-height', async (_req: Request, res: Response) => {
+    try {
+      const config = store.get();
+      const provider = getProvider(config.network);
+      const height = await provider.getBlockNumber();
+      res.json({ height });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
   /** GET /api/tx/broadcast-status/:messageHash — check if already broadcast */
   r.get('/broadcast-status/:messageHash', (req: Request, res: Response) => {
     const cached = broadcastResults.get(req.params.messageHash!);

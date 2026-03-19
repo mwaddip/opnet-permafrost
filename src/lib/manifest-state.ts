@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { readContract } from './api';
+import { readContract, getBlockHeight } from './api';
 import type { ManifestConfig, ManifestRead } from './manifest-types';
 import { resolveAbi } from './manifest';
 
@@ -7,6 +7,7 @@ const POLL_INTERVAL = 30_000; // 30 seconds
 
 export function useManifestState(config: ManifestConfig | null) {
   const [reads, setReads] = useState<Record<string, unknown>>({});
+  const [currentBlock, setCurrentBlock] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -20,8 +21,12 @@ export function useManifestState(config: ManifestConfig | null) {
     setLoading(true);
     const results: Record<string, unknown> = {};
 
-    await Promise.allSettled(
-      entries.map(async ([key, def]: [string, ManifestRead]) => {
+    // Fetch block height in parallel with reads
+    const blockPromise = getBlockHeight().then(r => setCurrentBlock(r.height)).catch(() => {});
+
+    await Promise.all([
+      blockPromise,
+      ...entries.map(async ([key, def]: [string, ManifestRead]) => {
         const contractKey = def.contract;
         const address = config.addresses[contractKey];
         if (!address) return;
@@ -38,7 +43,7 @@ export function useManifestState(config: ManifestConfig | null) {
           // Silently skip failed reads
         }
       }),
-    );
+    ]);
 
     setReads(prev => ({ ...prev, ...results }));
     setLoading(false);
@@ -55,5 +60,5 @@ export function useManifestState(config: ManifestConfig | null) {
     };
   }, [config, fetchAll]);
 
-  return { reads, loading, refresh: fetchAll };
+  return { reads, currentBlock, loading, refresh: fetchAll };
 }

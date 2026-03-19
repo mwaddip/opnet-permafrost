@@ -252,6 +252,9 @@ export const readContract = (contract: string, method: string, abi?: unknown[]) 
     body: JSON.stringify({ contract, method, abi }),
   });
 
+export const getBlockHeight = () =>
+  json<{ height: number }>('/tx/block-height');
+
 // ── Reset ──
 
 export const resetInstance = () =>

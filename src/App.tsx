@@ -151,6 +151,7 @@ export function App() {
         const root = document.documentElement;
         if (theme.accent) { root.style.setProperty('--accent', theme.accent); applied = true; }
         if (theme.accentHover) { root.style.setProperty('--accent-hover', theme.accentHover); applied = true; }
+        if (theme.bg) { root.style.setProperty('--bg', theme.bg); applied = true; }
         if (theme.radius) { root.style.setProperty('--radius', theme.radius); applied = true; }
       } catch { /* no manifest or config not loaded */ }
     };
@@ -160,6 +161,7 @@ export function App() {
         const root = document.documentElement;
         root.style.removeProperty('--accent');
         root.style.removeProperty('--accent-hover');
+        root.style.removeProperty('--bg');
         root.style.removeProperty('--radius');
       }
     };
