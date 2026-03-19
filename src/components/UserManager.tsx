@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { listUsers, addUser, removeUser, updateUserRole, listInvites, createInvite, deleteInvite } from '../lib/api';
+import { listUsers, addUser, removeUser, updateUserRole, listInvites, createInvite, deleteInvite, getAuthMe } from '../lib/api';
 
 interface User { address: string; role: string; label: string }
 interface Invite { code: string; role: string; usesLeft: number; expiresAt: number }
@@ -7,6 +7,7 @@ interface Invite { code: string; role: string; usesLeft: number; expiresAt: numb
 export function UserManager() {
   const [users, setUsers] = useState<User[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
+  const [myAddress, setMyAddress] = useState('');
   const [error, setError] = useState('');
 
   // Add user form
@@ -21,6 +22,7 @@ export function UserManager() {
   useEffect(() => {
     listUsers().then(r => setUsers(r.users)).catch(() => {});
     listInvites().then(r => setInvites(r.invites)).catch(() => {});
+    getAuthMe().then(r => { if (r.address) setMyAddress(r.address); }).catch(() => {});
   }, []);
 
   const handleAddUser = async () => {
@@ -76,13 +78,19 @@ export function UserManager() {
               <div style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--white-dim)', marginTop: 2 }}>{u.address.slice(0, 18)}...</div>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <select value={u.role} onChange={e => handleRoleChange(u.address, e.target.value)} style={{ fontSize: 12, padding: '4px 8px' }}>
-                <option value="admin">Admin</option>
-                <option value="user">User</option>
-              </select>
-              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px', color: 'var(--red)' }} onClick={() => handleRemove(u.address)}>
-                Remove
-              </button>
+              {u.address === myAddress ? (
+                <span style={{ fontSize: 12, color: 'var(--white-dim)' }}>you</span>
+              ) : (
+                <>
+                  <select value={u.role} onChange={e => handleRoleChange(u.address, e.target.value)} style={{ fontSize: 12, padding: '4px 8px' }}>
+                    <option value="admin">Admin</option>
+                    <option value="user">User</option>
+                  </select>
+                  <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px', color: 'var(--red)' }} onClick={() => handleRemove(u.address)}>
+                    Remove
+                  </button>
+                </>
+              )}
             </div>
           </div>
         ))}
