@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { encodeTx } from '../lib/api';
 import type { ManifestOperation, ManifestConfig } from '../lib/manifest-types';
-import { resolveParamValue, encodeParamValue } from '../lib/manifest';
+import { resolveParamValue, encodeParamValue, resolveAbi } from '../lib/manifest';
 
 interface Props {
   operation: ManifestOperation;
   config: ManifestConfig;
   reads: Record<string, unknown>;
-  onExecute: (contractAddress: string, method: string, params: string[], paramTypes: Array<'address' | 'u256' | 'bytes'>, messageHash: string, message: Uint8Array) => void;
+  onExecute: (contractAddress: string, method: string, params: string[], paramTypes: Array<'address' | 'u256' | 'bytes'>, messageHash: string, message: Uint8Array, abi?: unknown[]) => void;
   disabled?: boolean;
 }
 
@@ -54,7 +54,11 @@ export function OperationCard({ operation, config, reads, onExecute, disabled }:
 
       const result = await encodeTx(operation.method, params, paramTypes);
       const msgBytes = new Uint8Array(result.calldata.match(/.{2}/g)!.map(b => parseInt(b, 16)));
-      onExecute(contractAddress, operation.method, params, paramTypes, result.messageHash, msgBytes);
+      // Resolve the ABI for the contract so broadcast can find the method
+      const contractKey = operation.contract === '$dynamic' ? undefined : operation.contract;
+      const rawAbi = contractKey ? config.manifest.contracts[contractKey]?.abi : undefined;
+      const abi = rawAbi ? resolveAbi(rawAbi) : undefined;
+      onExecute(contractAddress, operation.method, params, paramTypes, result.messageHash, msgBytes, abi);
     } catch (e) {
       setError((e as Error).message);
     } finally {

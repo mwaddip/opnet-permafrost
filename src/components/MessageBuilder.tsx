@@ -19,6 +19,7 @@ export interface MessageMeta {
   params: Record<string, string>;
   paramTypes: Array<'address' | 'u256' | 'bytes'>;
   messageHash: string;
+  abi?: unknown[];
 }
 
 export function MessageBuilder({ contracts, onMessageBuilt, prefill, onPrefillConsumed }: Props) {

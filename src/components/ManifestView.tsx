@@ -5,7 +5,7 @@ import { OperationCard } from './OperationCard';
 
 interface Props {
   config: ManifestConfig;
-  onExecute: (contractAddress: string, method: string, params: string[], paramTypes: Array<'address' | 'u256' | 'bytes'>, messageHash: string, message: Uint8Array) => void;
+  onExecute: (contractAddress: string, method: string, params: string[], paramTypes: Array<'address' | 'u256' | 'bytes'>, messageHash: string, message: Uint8Array, abi?: unknown[]) => void;
   disabled?: boolean;
   isAdmin?: boolean;
 }

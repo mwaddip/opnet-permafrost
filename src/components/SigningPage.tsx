@@ -169,6 +169,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
         method: messageMeta.method,
         params: Object.values(messageMeta.params),
         paramTypes: messageMeta.paramTypes,
+        abi: messageMeta.abi,
         signature,
         messageHash: messageMeta.messageHash,
       }) as { transactionId?: string; error?: string; alreadyBroadcast?: boolean };
@@ -347,13 +348,14 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
             <ManifestView
               config={config.manifestConfig as ManifestConfig}
               isAdmin={config.authMode === 'wallet' ? getSessionRole() === 'admin' : hasAdminToken()}
-              onExecute={(contractAddr, method, params, paramTypes, messageHash, msgBytes) => {
+              onExecute={(contractAddr, method, params, paramTypes, messageHash, msgBytes, abi) => {
                 setMessageMeta({
                   contractAddress: contractAddr,
                   method,
                   params: Object.fromEntries(params.map((v, i) => [`p${i}`, v])),
                   paramTypes,
                   messageHash,
+                  abi,
                 });
                 setMessage(msgBytes);
                 setIsInitiator(true);
