@@ -33,7 +33,7 @@ function uint8ToBase64(bytes: Uint8Array): string {
 }
 
 interface Props {
-  onAuthenticated: (role: string, address: string) => void;
+  onAuthenticated: (role: string, address: string, sessionCode?: string) => void;
 }
 
 export function WalletAuth({ onAuthenticated }: Props) {
@@ -41,6 +41,7 @@ export function WalletAuth({ onAuthenticated }: Props) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [walletAddress, setWalletAddress] = useState('');
+  const [sessionCode, setSessionCode] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [inviteLabel, setInviteLabel] = useState('');
 
@@ -53,16 +54,13 @@ export function WalletAuth({ onAuthenticated }: Props) {
 
     const { challenge } = await getChallenge();
 
-    // Construct message and double-hash per OPWallet convention
     const message = `PERMAFROST auth ${challenge}`;
     const msgBytes = new TextEncoder().encode(message);
     const hashBuf = await crypto.subtle.digest('SHA-256', msgBytes);
     const messageHex = bytesToHex(new Uint8Array(hashBuf));
 
-    // Sign with ML-DSA via OPWallet
     const signed = await wallet.web3.signMLDSAMessage(messageHex);
 
-    // Convert hex sig/pubkey to base64 for the backend
     const signature = uint8ToBase64(hexToBytes(signed.signature));
     const publicKey = uint8ToBase64(hexToBytes(signed.publicKey));
 
@@ -87,12 +85,14 @@ export function WalletAuth({ onAuthenticated }: Props) {
       const auth = await signChallenge();
       if (!auth) return;
 
-      const result = await verifyAuth(auth.challenge, auth.signature, auth.publicKey);
+      // Pass session code to auto-register as user if not in DB
+      const code = sessionCode.trim().toUpperCase() || undefined;
+      const result = await verifyAuth(auth.challenge, auth.signature, auth.publicKey, code);
 
       if (result.authenticated && result.token && result.role) {
         setAdminToken(result.token);
         setSessionRole(result.role);
-        onAuthenticated(result.role, result.address || '');
+        onAuthenticated(result.role, result.address || '', code);
       } else if (result.needsInvite) {
         setStep('invite');
       } else {
@@ -141,8 +141,32 @@ export function WalletAuth({ onAuthenticated }: Props) {
       </div>
 
       {step === 'connect' && (
-        <div className="card" style={{ textAlign: 'center' }}>
-          <p style={{ marginBottom: 16 }}>Connect your OPWallet to authenticate</p>
+        <div className="card">
+          <p style={{ textAlign: 'center', marginBottom: 16 }}>Connect your OPWallet to authenticate</p>
+
+          <div className="form-row">
+            <label>
+              Session Code
+              <input
+                autoFocus
+                value={sessionCode}
+                onChange={e => {
+                  const val = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                  setSessionCode(val);
+                }}
+                placeholder="Paste session code to join ceremony"
+                maxLength={6}
+                style={{ fontFamily: 'monospace', fontSize: 18, letterSpacing: '0.15em', textTransform: 'uppercase', textAlign: 'center' }}
+              />
+            </label>
+          </div>
+
+          <p style={{ fontSize: 11, color: 'var(--white-dim)', textAlign: 'center', marginBottom: 16 }}>
+            {sessionCode
+              ? 'Connect wallet to join as signer'
+              : 'Optional — paste a code if joining a DKG ceremony'}
+          </p>
+
           {error && <div className="warning" style={{ marginBottom: 12 }}>{error}</div>}
           <button className="btn btn-primary btn-full" onClick={handleConnect} disabled={loading}>
             {loading ? <span className="spinner" /> : 'Connect OPWallet'}

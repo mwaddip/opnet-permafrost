@@ -196,10 +196,10 @@ export const removeHosting = () =>
 export const getChallenge = () =>
   json<{ challenge: string }>('/auth/challenge');
 
-export const verifyAuth = (challenge: string, signature: string, publicKey: string) =>
+export const verifyAuth = (challenge: string, signature: string, publicKey: string, sessionCode?: string) =>
   json<{ authenticated: boolean; needsInvite?: boolean; token?: string; role?: string; address?: string; label?: string }>('/auth/verify', {
     method: 'POST',
-    body: JSON.stringify({ challenge, signature, publicKey }),
+    body: JSON.stringify({ challenge, signature, publicKey, ...(sessionCode ? { sessionCode } : {}) }),
   });
 
 export const redeemInvite = (challenge: string, signature: string, publicKey: string, inviteCode: string, label?: string) =>

@@ -100,6 +100,7 @@ export function ThemeToggle() {
 export function App() {
   const [view, setView] = useState<View>('loading');
   const [sendPrefill, setSendPrefill] = useState<SendPrefill | null>(null);
+  const [pendingSessionCode, setPendingSessionCode] = useState<string | null>(null);
 
   const checkStatus = useCallback(async () => {
     try {
@@ -178,11 +179,14 @@ export function App() {
   } else if (view === 'unlock') {
     content = <UnlockScreen onUnlocked={handleSetupComplete} />;
   } else if (view === 'walletAuth') {
-    content = <WalletAuth onAuthenticated={() => checkStatus()} />;
+    content = <WalletAuth onAuthenticated={(_role, _addr, sessionCode) => {
+      if (sessionCode) setPendingSessionCode(sessionCode);
+      checkStatus();
+    }} />;
   } else if (view === 'wallet') {
     content = <WalletSetup onComplete={handleSetupComplete} />;
   } else if (view === 'dkg') {
-    content = <DKGWizard onComplete={handleSetupComplete} />;
+    content = <DKGWizard onComplete={handleSetupComplete} initialSessionCode={pendingSessionCode} />;
   } else if (view === 'settings') {
     content = <Settings onBack={() => setView('signing')} onSend={(prefill) => { setSendPrefill(prefill); setView('signing'); }} />;
   } else {

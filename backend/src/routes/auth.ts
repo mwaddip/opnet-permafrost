@@ -24,10 +24,11 @@ export function authRoutes(userStore: UserStore): Router {
 
   /** POST /api/auth/verify — verify ML-DSA sig, return token + role */
   r.post('/verify', (req: Request, res: Response) => {
-    const { challenge, signature, publicKey } = req.body as {
+    const { challenge, signature, publicKey, sessionCode } = req.body as {
       challenge?: string;
       signature?: string;  // base64-encoded ML-DSA sig
       publicKey?: string;  // base64-encoded ML-DSA pubkey (NOT tweakedPubKey)
+      sessionCode?: string; // DKG session code — auto-registers as user if provided
     };
 
     if (!challenge || !signature || !publicKey) {
@@ -51,7 +52,18 @@ export function authRoutes(userStore: UserStore): Router {
       return;
     }
 
-    const user = userStore.getUser(result.walletAddress);
+    let user = userStore.getUser(result.walletAddress);
+
+    // Auto-register as user if a DKG session code is provided
+    if (!user && sessionCode?.trim()) {
+      try {
+        user = userStore.addUser(result.walletAddress, 'user', result.walletAddress.slice(0, 10));
+      } catch {
+        // Already exists (race condition) — try fetching again
+        user = userStore.getUser(result.walletAddress);
+      }
+    }
+
     if (!user) {
       res.json({ authenticated: false, needsInvite: true, address: result.walletAddress });
       return;

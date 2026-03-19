@@ -299,21 +299,24 @@ function RelayPhaseProgress({ phase, collected, total, label }: {
 
 interface DKGWizardProps {
   onComplete?: () => void;
+  initialSessionCode?: string | null;
 }
 
-export function DKGWizard({ onComplete }: DKGWizardProps = {}) {
+export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {}) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [pasteValue, setPasteValue] = useState('');
   const [copied, setCopied] = useState<string | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
 
   // ── Transport mode state ──
-  const [transportMode, setTransportMode] = useState<TransportMode>('choose');
+  const [transportMode, setTransportMode] = useState<TransportMode>(
+    initialSessionCode && initialSessionCode.length >= 6 ? 'relay-join' : 'choose',
+  );
   const [relayClient, setRelayClient] = useState<RelayClient | null>(null);
   const relayClientRef = useRef<RelayClient | null>(null);
   const [relaySessionCode, setRelaySessionCode] = useState('');
   const [relaySessionUrl, setRelaySessionUrl] = useState('');
-  const [relayJoinCode, setRelayJoinCode] = useState('');
+  const [relayJoinCode, setRelayJoinCode] = useState(initialSessionCode || '');
   const [relayStatus, setRelayStatus] = useState('');
   const [relayError, setRelayError] = useState('');
   const [relayReady, setRelayReady] = useState(false);
