@@ -24,7 +24,7 @@ export function OtziLogo({ size = 32, className }: { size?: number; className?: 
     <svg
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 256 256"
-      fill="currentColor"
+      fill="var(--logo-color)"
       width={size}
       height={size}
       className={className}
@@ -51,7 +51,7 @@ export function OtziWordmark({ height = 40, className }: { height?: number; clas
     <svg
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 262 152"
-      fill="currentColor"
+      fill="var(--logo-color)"
       width={w}
       height={height}
       className={className}
@@ -158,7 +158,7 @@ export function App() {
         // Pick mode-specific colors, fall back to legacy flat fields (treated as dark)
         const colors = (isDark ? theme.dark : theme.light)
           || (isDark ? { accent: theme.accent, accentHover: theme.accentHover, bg: theme.bg } : null);
-        if (colors?.accent) { root.style.setProperty('--accent', colors.accent); applied = true; }
+        if (colors?.accent) { root.style.setProperty('--accent', colors.accent); root.style.setProperty('--logo-color', colors.accent); applied = true; }
         if (colors?.accentHover) { root.style.setProperty('--accent-hover', colors.accentHover); applied = true; }
         if (colors?.bg) { root.style.setProperty('--bg', colors.bg); applied = true; }
         if (theme.radius) { root.style.setProperty('--radius', theme.radius); applied = true; }
@@ -169,6 +169,7 @@ export function App() {
       if (applied) {
         const root = document.documentElement;
         root.style.removeProperty('--accent');
+        root.style.removeProperty('--logo-color');
         root.style.removeProperty('--accent-hover');
         root.style.removeProperty('--bg');
         root.style.removeProperty('--radius');
