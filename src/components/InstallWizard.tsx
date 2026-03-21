@@ -138,7 +138,7 @@ export function InstallWizard({ onComplete }: Props) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
             {([
               ['password', 'Admin Password', 'Protect settings with a password. Simple setup.'],
-              ...storageMode !== 'encrypted-portable' ? [['wallet', 'OPWallet (ML-DSA)', 'Authenticate with OPWallet signatures. Role-based access for multiple users.'] as const] : [],
+              ['wallet', 'OPWallet (ML-DSA)', 'Authenticate with OPWallet signatures. Role-based access for multiple users.'],
             ] as const).map(([value, label, desc]) => (
               <label key={value} style={{
                 display: 'flex', alignItems: 'flex-start', gap: 12, padding: 12,
@@ -175,7 +175,16 @@ export function InstallWizard({ onComplete }: Props) {
           <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
             <button className="btn btn-secondary" onClick={() => setStep(1)}>Back</button>
             <button className="btn btn-primary" style={{ flex: 1 }}
-              onClick={() => { setError(''); setStep(3); }}
+              onClick={() => {
+                setError('');
+                if (authMode === 'wallet') {
+                  // Wallet auth requires persistent server — skip storage selection
+                  setStorageMode('persistent');
+                  setStep(3);
+                } else {
+                  setStep(3);
+                }
+              }}
               disabled={authMode === 'wallet' && !walletAddress}>
               Next
             </button>
@@ -185,6 +194,8 @@ export function InstallWizard({ onComplete }: Props) {
 
       {step === 3 && (
         <div className="card">
+          {authMode !== 'wallet' && (
+            <>
           <h2>Storage Mode</h2>
           <p>How should this instance store sensitive data (wallet keys, DKG shares)?</p>
 
@@ -208,14 +219,7 @@ export function InstallWizard({ onComplete }: Props) {
                   name="storageMode"
                   value={value}
                   checked={storageMode === value}
-                  onChange={() => {
-                    setStorageMode(value);
-                    // Portable mode doesn't support wallet auth (no persistent server state)
-                    if (value === 'encrypted-portable' && authMode === 'wallet') {
-                      setAuthMode('password');
-                      setWalletAddress('');
-                    }
-                  }}
+                  onChange={() => setStorageMode(value)}
                   style={{ marginTop: 4 }}
                 />
                 <div>
@@ -241,6 +245,8 @@ export function InstallWizard({ onComplete }: Props) {
                 </label>
               </div>
             </div>
+          )}
+            </>
           )}
 
           {authMode === 'password' && (
