@@ -3,16 +3,13 @@ import { MessageBuilder, type MessageMeta } from './MessageBuilder';
 import { ShareImport, ThresholdSign } from './ThresholdSign';
 import { ManifestView } from './ManifestView';
 import { RelayClient } from '../lib/relay';
-import { getConfig, getWalletBalance, broadcastTx, getBroadcastStatus, getSessionRole, hasAdminToken, getActiveSessions } from '../lib/api';
+import { getConfig, getWalletBalance, broadcastTx, getBroadcastStatus, getSessionRole, hasAdminToken, getActiveSessions, RELAY_URL } from '../lib/api';
 import { toHex } from '../lib/threshold';
 import type { VaultConfig } from '../lib/vault-types';
 import type { ManifestConfig } from '../lib/manifest-types';
 import type { DecryptedShare } from '../lib/share-crypto';
 import type { SendPrefill } from '../App';
 import { OtziWordmark } from '../App';
-
-const RELAY_URL = import.meta.env.VITE_RELAY_URL as string
-  || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
 const TXMSG_PREFIX = 'TXMSG:';
 
 interface Props {

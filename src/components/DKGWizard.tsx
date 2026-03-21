@@ -44,13 +44,9 @@ import {
 } from '../lib/dkg';
 import { RelayClient } from '../lib/relay';
 import { sessionFingerprint } from '../lib/relay-crypto';
+import { RELAY_URL } from '../lib/api';
 import type { ThresholdKeyShare } from '@btc-vision/post-quantum/threshold-ml-dsa.js';
 import { OtziWordmark } from '../App';
-
-// ── Constants ──
-
-const RELAY_URL = import.meta.env.VITE_RELAY_URL as string
-  || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
 
 // ── Types ──
 

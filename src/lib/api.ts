@@ -9,6 +9,9 @@ const BASE = '/api';
 const SESSION_TOKEN_KEY = 'permafrost-session-token';
 const SESSION_ROLE_KEY = 'permafrost-session-role';
 
+export const RELAY_URL = import.meta.env.VITE_RELAY_URL as string
+  || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+
 function getAdminToken(): string | null {
   try { return sessionStorage.getItem(SESSION_TOKEN_KEY); } catch { return null; }
 }

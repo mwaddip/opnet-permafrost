@@ -19,26 +19,13 @@ import {
   type DKGPhase4Broadcast,
 } from '@btc-vision/post-quantum/threshold-ml-dsa.js';
 import { sha256 } from '@noble/hashes/sha2.js';
+import { toHex, fromHex } from './hex';
 
 function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a[i]! ^ b[i]!;
   return diff === 0;
-}
-
-// ── Helpers ──
-
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function fromHex(hex: string): Uint8Array {
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
 }
 
 // ── Blob envelope ──

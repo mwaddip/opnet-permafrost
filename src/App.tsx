@@ -140,7 +140,7 @@ export function App() {
       console.error('Failed to check status:', e);
       setView('wizard');
     }
-  }, []);
+  }, [pendingSessionCode]);
 
   useEffect(() => { checkStatus(); }, [checkStatus]);
 

@@ -87,6 +87,28 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
       params: string[];
       paramTypes: Array<'address' | 'u256' | 'bytes'>;
     };
+
+    // Validate inputs
+    if (!method || typeof method !== 'string') {
+      res.status(400).json({ error: 'method must be a non-empty string' });
+      return;
+    }
+    if (!Array.isArray(params)) {
+      res.status(400).json({ error: 'params must be an array' });
+      return;
+    }
+    if (!Array.isArray(paramTypes) || paramTypes.length !== params.length) {
+      res.status(400).json({ error: 'paramTypes must be an array of same length as params' });
+      return;
+    }
+    const validParamTypes = ['address', 'u256', 'bytes'];
+    for (const pt of paramTypes) {
+      if (!validParamTypes.includes(pt)) {
+        res.status(400).json({ error: `invalid paramType '${pt}', must be one of: ${validParamTypes.join(', ')}` });
+        return;
+      }
+    }
+
     try {
       // Compute 4-byte selector: SHA256(methodName) first 4 bytes
       const selectorInput = new TextEncoder().encode(method);
@@ -215,6 +237,11 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
       signature: string;
       messageHash?: string;
     };
+
+    if (!signature || !/^[0-9a-fA-F]+$/.test(signature)) {
+      res.status(400).json({ error: 'invalid signature hex' });
+      return;
+    }
 
     // Prevent double-broadcast
     if (messageHash) {

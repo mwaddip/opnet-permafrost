@@ -863,36 +863,3 @@ export function ThresholdSign({
   );
 }
 
-// ---------------------------------------------------------------------------
-// ShareGate — wraps share import + threshold signing mode for Admin
-// ---------------------------------------------------------------------------
-
-interface ShareGateProps {
-  children: (share: DecryptedShare) => React.ReactNode;
-}
-
-export function ShareGate({ children }: ShareGateProps) {
-  const [share, setShare] = useState<DecryptedShare | null>(null);
-
-  if (!share) {
-    return <ShareImport onShareLoaded={setShare} />;
-  }
-
-  return (
-    <div className="threshold-active">
-      <div className="threshold-share-info">
-        <span className="threshold-share-badge">
-          Party {share.partyId} | {share.threshold}-of-{share.parties}
-        </span>
-        <button
-          className="threshold-clear-btn"
-          onClick={() => setShare(null)}
-          title="Clear share and re-import"
-        >
-          Clear
-        </button>
-      </div>
-      {children(share)}
-    </div>
-  );
-}

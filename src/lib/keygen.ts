@@ -8,6 +8,7 @@
 
 import { encrypt } from './crypto';
 import { serializeKeyShare } from './serialize';
+import { toHex } from './hex';
 import type { ThresholdKeyShare } from '@btc-vision/post-quantum/threshold-ml-dsa.js';
 
 export interface ShareFile {
@@ -18,10 +19,6 @@ export interface ShareFile {
   parties: number;
   level: number;
   encrypted: string;
-}
-
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**

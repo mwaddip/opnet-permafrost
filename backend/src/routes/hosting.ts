@@ -134,7 +134,7 @@ export function hostingRoutes(store: ConfigStore, requireAdmin: RequestHandler, 
   /** DELETE /api/hosting — remove domain config, revert to default */
   r.delete('/', requireAdmin, (_req: Request, res: Response) => {
     try {
-      store.update({ hosting: undefined as never });
+      store.update({ hosting: undefined } as Partial<import('../lib/types.js').VaultConfig>);
 
       if (hasCaddy) {
         writeCaddyfile({ domain: '', httpsEnabled: false });

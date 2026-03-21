@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { getChallenge, verifyAuth, redeemInvite, setAdminToken, setSessionRole } from '../lib/api';
+import { toHex as bytesToHex, fromHex, uint8ToBase64 } from '../lib/hex';
 import { OtziWordmark } from '../App';
 
 interface OPNetWallet {
@@ -15,21 +16,9 @@ declare global {
   }
 }
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
 function hexToBytes(hex: string): Uint8Array {
   if (hex.startsWith('0x')) hex = hex.slice(2);
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
-  return bytes;
-}
-
-function uint8ToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
-  return btoa(binary);
+  return fromHex(hex);
 }
 
 interface Props {

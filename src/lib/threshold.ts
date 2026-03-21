@@ -15,22 +15,7 @@ import {
   type ThresholdKeyShare,
 } from '@btc-vision/post-quantum/threshold-ml-dsa.js';
 import type { DecryptedShare } from './share-crypto';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function fromHex(hex: string): Uint8Array {
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
+import { toHex, fromHex } from './hex';
 
 // ---------------------------------------------------------------------------
 // Blob envelope
@@ -327,42 +312,6 @@ export function addBlob(session: SigningSession, blob: string, expectedRound?: n
 }
 
 /**
- * Attempt signing up to maxAttempts times.
- * Each failed combine() resets round state and retries from round1.
- */
-export async function signWithRetry(
-  session: SigningSession,
-  onRound: (round: number, blob: string) => Promise<void>,
-  waitForRound: (round: number) => Promise<void>,
-  maxAttempts = 10,
-): Promise<Uint8Array> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    // Reset round state for retry
-    session.round1State?.destroy();
-    session.round2State?.destroy();
-    session.round1State = null;
-    session.round2State = null;
-    session.myRound1Hash = null;
-    session.myRound2Commitment = null;
-    session.myRound3Response = null;
-    session.collectedRound1Hashes.clear();
-    session.collectedRound2Commitments.clear();
-    session.collectedRound3Responses.clear();
-
-    await onRound(1, round1(session));
-    await waitForRound(1);
-    await onRound(2, round2(session));
-    await waitForRound(2);
-    await onRound(3, round3(session));
-    await waitForRound(3);
-
-    const sig = combine(session);
-    if (sig) return sig;
-  }
-  throw new Error(`Signing failed after ${maxAttempts} attempts — all parties must restart`);
-}
-
-/**
  * Destroy sensitive state. Call when done or on cancel.
  */
 export function destroySession(session: SigningSession): void {
@@ -372,5 +321,5 @@ export function destroySession(session: SigningSession): void {
   session.round2State = null;
 }
 
-export { toHex, fromHex };
+export { toHex, fromHex } from './hex';
 export type { ThresholdKeyShare };
