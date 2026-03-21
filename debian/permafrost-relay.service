@@ -1,0 +1,14 @@
+[Unit]
+Description=PERMAFROST Relay
+After=network.target
+
+[Service]
+Type=simple
+User=permafrost
+EnvironmentFile=/etc/default/permafrost
+ExecStart=/opt/permafrost/relay -addr :${RELAY_PORT}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

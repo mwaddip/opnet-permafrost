@@ -32,11 +32,22 @@ Both DKG and signing support two modes:
 ### Linux (one command)
 
 ```bash
-curl -sL https://github.com/mwaddip/otzi/releases/latest/download/install.sh | sudo bash
+curl -sL https://github.com/mwaddip/otzi/releases/latest/download/install.sh | bash
 ```
 
-Downloads the latest release, installs to `/opt/permafrost`, creates systemd
-services, and configures nginx or apache if detected.
+Downloads the latest release, creates systemd services, and configures
+nginx or apache if detected. Works with or without sudo — without sudo it
+installs to `~/.permafrost/` with user-level services.
+
+### Debian/Ubuntu (.deb)
+
+```bash
+curl -sLO https://github.com/mwaddip/otzi/releases/latest/download/permafrost-vault_*.deb
+sudo dpkg -i permafrost-vault_*.deb
+```
+
+Installs to `/opt/permafrost/`, creates system user, configures nginx,
+and prompts for port and domain via debconf.
 
 ### Docker
 

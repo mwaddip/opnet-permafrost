@@ -6,3 +6,4 @@ dist-offline
 data/
 backend/data/
 docs/superpowers/
+*.deb

@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  purge)
+    # Remove nginx config
+    rm -f /etc/nginx/sites-enabled/permafrost
+    rm -f /etc/nginx/sites-available/permafrost
+    if command -v nginx >/dev/null 2>&1; then
+      systemctl reload nginx 2>/dev/null || true
+    fi
+
+    # Remove environment file
+    rm -f /etc/default/permafrost
+
+    # Remove data (user confirms via dpkg --purge)
+    rm -rf /var/lib/permafrost
+
+    # Remove system user
+    if id permafrost >/dev/null 2>&1; then
+      deluser --system permafrost 2>/dev/null || true
+    fi
+    ;;
+esac
+
+#DEBHELPER#

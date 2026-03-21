@@ -1,0 +1,87 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+case "$1" in
+  configure)
+    # Read debconf values
+    db_get permafrost-vault/port
+    PORT="${RET:-3100}"
+    RELAY_PORT=$((PORT + 1))
+
+    db_get permafrost-vault/domain
+    DOMAIN="${RET:-localhost}"
+
+    # Create system user
+    if ! id permafrost >/dev/null 2>&1; then
+      adduser --system --home /var/lib/permafrost --no-create-home \
+              --shell /usr/sbin/nologin --group permafrost
+    fi
+
+    # Data directory
+    mkdir -p /var/lib/permafrost
+    chown permafrost:permafrost /var/lib/permafrost
+
+    # Write environment file for systemd
+    cat > /etc/default/permafrost <<EOF
+PORT=${PORT}
+RELAY_PORT=${RELAY_PORT}
+DATA_DIR=/var/lib/permafrost
+NODE_ENV=production
+EOF
+
+    # Write hosting seed for first-time setup
+    if [ ! -f /var/lib/permafrost/config.json ]; then
+      SSL=true
+      [ "$PORT" = "80" ] && SSL=false
+      cat > /var/lib/permafrost/hosting-seed.json <<SEED
+{"domain":"${DOMAIN}","port":443,"httpsEnabled":${SSL}}
+SEED
+      chown permafrost:permafrost /var/lib/permafrost/hosting-seed.json
+    fi
+
+    # Write nginx config
+    if [ -d /etc/nginx/sites-available ]; then
+      cat > /etc/nginx/sites-available/permafrost <<NGINX
+server {
+    listen 80;
+    server_name ${DOMAIN};
+
+    location / {
+        proxy_pass http://127.0.0.1:${PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 3600s;
+    }
+}
+NGINX
+
+      # Enable site
+      if [ -d /etc/nginx/sites-enabled ] && [ ! -e /etc/nginx/sites-enabled/permafrost ]; then
+        ln -sf /etc/nginx/sites-available/permafrost /etc/nginx/sites-enabled/permafrost
+      fi
+
+      # Test and reload nginx
+      if command -v nginx >/dev/null 2>&1; then
+        if nginx -t 2>/dev/null; then
+          systemctl reload nginx 2>/dev/null || true
+        else
+          echo "WARNING: nginx config test failed. Run: sudo nginx -t"
+        fi
+      fi
+    fi
+
+    # Enable and start services
+    systemctl daemon-reload
+    systemctl enable permafrost-relay permafrost 2>/dev/null || true
+    systemctl start permafrost-relay permafrost 2>/dev/null || true
+    ;;
+esac
+
+#DEBHELPER#

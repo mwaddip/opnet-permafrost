@@ -1,0 +1,14 @@
+Package: permafrost-vault
+Version: 2.2.3
+Section: web
+Priority: optional
+Architecture: amd64
+Depends: nodejs (>= 20)
+Recommends: nginx
+Maintainer: PERMAFROST <noreply@github.com>
+Description: Post-quantum multisig vault for OPNet Bitcoin L1 smart contracts
+ PERMAFROST Vault combines distributed key generation (DKG), threshold
+ ML-DSA signing, wallet management, and OPNet transaction broadcasting
+ into a single self-hosted operations interface. Supports declarative
+ project manifests for custom contract operations.
+Homepage: https://github.com/mwaddip/otzi

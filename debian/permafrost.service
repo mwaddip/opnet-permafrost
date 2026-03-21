@@ -1,0 +1,16 @@
+[Unit]
+Description=PERMAFROST Vault Backend
+After=network.target permafrost-relay.service
+Requires=permafrost-relay.service
+
+[Service]
+Type=simple
+User=permafrost
+WorkingDirectory=/opt/permafrost
+EnvironmentFile=/etc/default/permafrost
+ExecStart=/usr/bin/node backend/server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

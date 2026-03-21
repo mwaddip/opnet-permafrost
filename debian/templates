@@ -1,0 +1,13 @@
+Template: permafrost-vault/port
+Type: string
+Default: 3100
+Description: Backend port for PERMAFROST Vault:
+ The port the backend server will listen on. The relay will use
+ the next port (e.g., 3101). Choose a port that is not in use.
+
+Template: permafrost-vault/domain
+Type: string
+Default: localhost
+Description: Domain name for PERMAFROST Vault:
+ Used in the nginx server_name directive and for generating
+ session join URLs. Use 'localhost' for local-only access.

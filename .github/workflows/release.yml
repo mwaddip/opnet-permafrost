@@ -64,6 +64,12 @@ jobs:
           echo "${TAG#v}" > staging-win/version.txt
           cd staging-win && zip -r "../permafrost-${TAG}-windows-amd64.zip" . && cd ..
 
+      - name: Build debian package
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION="${TAG#v}"
+          bash debian/build-deb.sh "permafrost-${TAG}-linux-amd64.tar.gz" "$VERSION"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -71,4 +77,5 @@ jobs:
           files: |
             permafrost-*.tar.gz
             permafrost-*.zip
+            permafrost-vault_*.deb
             install.sh
