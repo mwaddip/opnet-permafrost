@@ -12,28 +12,36 @@ const ABI_TYPE_MAP: Record<string, string> = {
   address: 'ADDRESS', bool: 'BOOL', bytes: 'BYTES', string: 'STRING',
 };
 
-function normalizeAbi(raw: unknown[]): unknown[] {
-  return raw.map(entry => {
-    if (typeof entry !== 'object' || !entry) return entry;
-    const e = entry as Record<string, unknown>;
-    return {
-      ...e,
-      type: typeof e.type === 'string' ? e.type.toLowerCase() : e.type,
-      constant: (e.inputs as unknown[] | undefined)?.length === 0,
-      inputs: Array.isArray(e.inputs) ? e.inputs.map((inp: Record<string, unknown>) => ({
-        ...inp, type: ABI_TYPE_MAP[String(inp.type).toLowerCase()] || String(inp.type).toUpperCase(),
-      })) : e.inputs,
-      outputs: Array.isArray(e.outputs) ? e.outputs.map((out: Record<string, unknown>) => ({
-        ...out, type: ABI_TYPE_MAP[String(out.type).toLowerCase()] || String(out.type).toUpperCase(),
-      })) : e.outputs,
-    };
-  });
+// Shorthand → full ABI from the opnet SDK
+const ABI_SHORTHANDS: Record<string, typeof OP_20_ABI> = {
+  OP_20: OP_20_ABI,
+  OP_20S: OP_20_ABI, // extend later
+};
+
+function normalizeAbiEntry(entry: unknown): unknown[] {
+  // Expand shorthand strings ("OP_20" → full ABI array)
+  if (typeof entry === 'string') {
+    return ABI_SHORTHANDS[entry] ?? [];
+  }
+  if (typeof entry !== 'object' || !entry) return [entry];
+  const e = entry as Record<string, unknown>;
+  return [{
+    ...e,
+    type: typeof e.type === 'string' ? e.type.toLowerCase() : e.type,
+    constant: (e.inputs as unknown[] | undefined)?.length === 0,
+    inputs: Array.isArray(e.inputs) ? e.inputs.map((inp: Record<string, unknown>) => ({
+      ...inp, type: ABI_TYPE_MAP[String(inp.type).toLowerCase()] || String(inp.type).toUpperCase(),
+    })) : e.inputs,
+    outputs: Array.isArray(e.outputs) ? e.outputs.map((out: Record<string, unknown>) => ({
+      ...out, type: ABI_TYPE_MAP[String(out.type).toLowerCase()] || String(out.type).toUpperCase(),
+    })) : e.outputs,
+  }];
 }
 
 function resolveAbi(abi: unknown): unknown[] {
   if (!abi) return OP_20_ABI;
   const raw = Array.isArray(abi) ? abi : [abi];
-  return normalizeAbi(raw);
+  return raw.flatMap(normalizeAbiEntry);
 }
 
 export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requireAdmin: RequestHandler): Router {
@@ -155,10 +163,11 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
 
   /** POST /api/tx/read — read a value from a contract */
   r.post('/read', async (req: Request, res: Response) => {
-    const { contract: contractAddr, method, abi } = req.body as {
+    const { contract: contractAddr, method, abi, params: rawParams } = req.body as {
       contract: string;
       method: string;
       abi?: unknown;
+      params?: unknown[];
     };
     try {
       const config = store.get();
@@ -172,7 +181,15 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
         res.status(400).json({ error: `Method "${method}" not found on contract` });
         return;
       }
-      const result = await c[method]!();
+      // Convert params if provided (for parameterized reads like balanceOf)
+      const callParams = (rawParams ?? []).map(val => {
+        const s = String(val);
+        // Detect address (0x + 64 hex) and wrap it
+        if (/^0x[0-9a-fA-F]{64}$/.test(s)) return Address.wrap(Buffer.from(s.replace(/^0x/, ''), 'hex'));
+        // Try as BigInt for numeric types
+        try { return BigInt(s); } catch { return val; }
+      });
+      const result = await c[method]!(...callParams);
       res.json({ result: result.properties });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });

@@ -143,7 +143,24 @@
         },
         "method": {
           "type": "string",
-          "description": "Method name to call (must exist in the contract's ABI). Called with no arguments."
+          "description": "Method name to call (must exist in the contract's ABI)."
+        },
+        "params": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "source"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "type": "string", "enum": ["address", "uint256", "bool"] },
+              "source": {
+                "type": "string",
+                "pattern": "^(contract|setting):.+$",
+                "description": "Auto-fill source. 'contract:<key>' = address from settings. 'setting:<key>' = custom setting value."
+              }
+            }
+          },
+          "description": "Optional parameters for the read call (e.g., balanceOf(address)). Values are resolved from contract addresses or settings."
         },
         "returns": {
           "type": "string",

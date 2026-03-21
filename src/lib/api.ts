@@ -246,10 +246,10 @@ export const saveManifest = (manifestConfig: unknown) =>
     body: JSON.stringify({ manifestConfig }),
   });
 
-export const readContract = (contract: string, method: string, abi?: unknown[]) =>
+export const readContract = (contract: string, method: string, abi?: unknown[], params?: unknown[]) =>
   json<{ result: Record<string, unknown> }>('/tx/read', {
     method: 'POST',
-    body: JSON.stringify({ contract, method, abi }),
+    body: JSON.stringify({ contract, method, abi, params: params?.length ? params : undefined }),
   });
 
 export const getBlockHeight = () =>

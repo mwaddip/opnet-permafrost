@@ -35,7 +35,15 @@ export function useManifestState(config: ManifestConfig | null) {
         const resolvedAbi = abi ? resolveAbi(abi) : undefined;
 
         try {
-          const response = await readContract(address, def.method, resolvedAbi);
+          // Resolve parameterized reads (e.g., balanceOf with address from config)
+          const callParams = def.params?.map(p => {
+            const [sourceType, sourceKey] = p.source.split(':');
+            if (sourceType === 'contract') return config.addresses[sourceKey!];
+            if (sourceType === 'setting') return config.settings?.[sourceKey!];
+            return undefined;
+          }).filter(Boolean) as string[] | undefined;
+
+          const response = await readContract(address, def.method, resolvedAbi, callParams);
           const props = response.result;
           const firstKey = Object.keys(props)[0];
           results[key] = firstKey ? props[firstKey] : undefined;

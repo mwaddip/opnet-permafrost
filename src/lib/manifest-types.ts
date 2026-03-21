@@ -24,9 +24,15 @@ export interface ManifestContract {
   abi: unknown[] | string;
 }
 
+export interface ManifestReadParam {
+  type: 'address' | 'uint256' | 'bool';
+  source: string; // "contract:<key>", "setting:<key>", "read:<key>"
+}
+
 export interface ManifestRead {
   contract: string;
   method: string;
+  params?: ManifestReadParam[];
   returns: 'uint8' | 'uint256' | 'address' | 'bool' | 'string';
   format?: 'raw' | 'token8' | 'btc8' | 'percent8' | 'price8' | 'address';
 }
