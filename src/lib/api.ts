@@ -262,13 +262,16 @@ export const getActiveSessions = () =>
 
 // ── Backup ──
 
-export const downloadBackup = () =>
-  json<unknown>('/backup');
+export const downloadBackup = (password: string) =>
+  json<{ encrypted: string }>('/backup', {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+  });
 
-export const restoreBackup = (backup: unknown) =>
+export const restoreBackup = (encrypted: string, password: string) =>
   json<{ ok: true }>('/restore', {
     method: 'POST',
-    body: JSON.stringify({ backup }),
+    body: JSON.stringify({ encrypted, password }),
   });
 
 // ── Reset ──

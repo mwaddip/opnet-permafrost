@@ -228,46 +228,7 @@ export function Settings({ onBack, onSend }: Props) {
           <HostingManager config={config} onConfigUpdate={setConfig} disabled={isLocked} isWalletAuth={isWalletAuth} />
 
           {/* Backup & Restore */}
-          <div className="card" style={isLocked ? { opacity: 0.5, pointerEvents: 'none' } : {}}>
-            <h2>Backup</h2>
-            <p style={{ fontSize: 13, color: 'var(--white-dim)', marginBottom: 12 }}>
-              Download a full backup including wallet, DKG keys, contracts, manifest, and users.
-            </p>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-primary" style={{ flex: 1 }} disabled={isLocked} onClick={async () => {
-                try {
-                  const backup = await downloadBackup();
-                  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `otzi-backup-${new Date().toISOString().slice(0, 10)}.json`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                } catch (e) { setError((e as Error).message); }
-              }}>
-                Download Backup
-              </button>
-              <button className="btn btn-secondary" disabled={isLocked} onClick={() => {
-                const input = document.createElement('input');
-                input.type = 'file';
-                input.accept = '.json';
-                input.onchange = async (e) => {
-                  const file = (e.target as HTMLInputElement).files?.[0];
-                  if (!file) return;
-                  try {
-                    const text = await file.text();
-                    const backup = JSON.parse(text);
-                    await restoreBackup(backup);
-                    window.location.reload();
-                  } catch (err) { setError((err as Error).message); }
-                };
-                input.click();
-              }}>
-                Restore
-              </button>
-            </div>
-          </div>
+          <BackupRestore disabled={isLocked} />
 
           {/* Reset */}
           <div className="card" style={isLocked ? { opacity: 0.5, pointerEvents: 'none' } : {}}>
@@ -455,6 +416,117 @@ function HostingManager({ config, onConfigUpdate, disabled, isWalletAuth }: { co
           Allow unauthenticated visitors to view dashboard and settings (read-only)
         </label>
       )}
+    </div>
+  );
+}
+
+// ── Backup & Restore ──
+
+function BackupRestore({ disabled }: { disabled?: boolean }) {
+  const [backupPassword, setBackupPassword] = useState('');
+  const [restorePassword, setRestorePassword] = useState('');
+  const [mode, setMode] = useState<'idle' | 'backup' | 'restore'>('idle');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleBackup = async () => {
+    if (!backupPassword) { setError('Password required'); return; }
+    setLoading(true); setError('');
+    try {
+      const result = await downloadBackup(backupPassword);
+      const blob = new Blob([result.encrypted], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `otzi-backup-${new Date().toISOString().slice(0, 10)}.enc`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMessage('Backup downloaded.');
+      setMode('idle'); setBackupPassword('');
+    } catch (e) { setError((e as Error).message); }
+    finally { setLoading(false); }
+  };
+
+  const handleRestore = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.enc,.json';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      if (!restorePassword) { setError('Password required'); return; }
+      setLoading(true); setError('');
+      try {
+        const encrypted = await file.text();
+        await restoreBackup(encrypted, restorePassword);
+        window.location.reload();
+      } catch (err) { setError((err as Error).message); }
+      finally { setLoading(false); }
+    };
+    input.click();
+  };
+
+  return (
+    <div className="card" style={disabled ? { opacity: 0.5, pointerEvents: 'none' } : {}}>
+      <h2>Backup</h2>
+      <p style={{ fontSize: 13, color: 'var(--white-dim)', marginBottom: 12 }}>
+        Encrypted backup of wallet, DKG keys, contracts, manifest, and users.
+      </p>
+
+      {mode === 'idle' && (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => setMode('backup')}>
+            Download Backup
+          </button>
+          <button className="btn btn-secondary" onClick={() => setMode('restore')}>
+            Restore
+          </button>
+        </div>
+      )}
+
+      {mode === 'backup' && (
+        <div>
+          <div className="form-row">
+            <label>
+              Backup Password
+              <input type="password" autoFocus value={backupPassword}
+                onChange={e => setBackupPassword(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleBackup()}
+                placeholder="Choose a password to encrypt the backup" />
+            </label>
+          </div>
+          {error && <div className="warning" style={{ marginBottom: 8 }}>{error}</div>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleBackup} disabled={loading || !backupPassword}>
+              {loading ? <span className="spinner" /> : 'Download'}
+            </button>
+            <button className="btn btn-secondary" onClick={() => { setMode('idle'); setError(''); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {mode === 'restore' && (
+        <div>
+          <div className="form-row">
+            <label>
+              Backup Password
+              <input type="password" autoFocus value={restorePassword}
+                onChange={e => setRestorePassword(e.target.value)}
+                placeholder="Password used when creating the backup" />
+            </label>
+          </div>
+          {error && <div className="warning" style={{ marginBottom: 8 }}>{error}</div>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleRestore} disabled={loading || !restorePassword}>
+              {loading ? <span className="spinner" /> : 'Select Backup File'}
+            </button>
+            <button className="btn btn-secondary" onClick={() => { setMode('idle'); setError(''); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {message && <div style={{ fontSize: 13, color: 'var(--accent)', marginTop: 8 }}>{message}</div>}
     </div>
   );
 }

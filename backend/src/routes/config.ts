@@ -3,6 +3,7 @@ import { ConfigStore } from '../lib/config-store.js';
 import type { UserStore } from '../lib/users.js';
 import { sanitizeConfig, type NetworkName, type StorageMode } from '../lib/types.js';
 import { hashPassword, verifyPassword, createToken } from '../lib/auth.js';
+import { encryptConfig, decryptConfig } from '../lib/encryption.js';
 
 export function configRoutes(store: ConfigStore, userStore: UserStore, requireAdmin: RequestHandler): Router {
   const r = Router();
@@ -200,8 +201,13 @@ export function configRoutes(store: ConfigStore, userStore: UserStore, requireAd
     }
   });
 
-  /** GET /api/backup — full backup (config + users) */
-  r.get('/backup', requireAdmin, (_req: Request, res: Response) => {
+  /** POST /api/backup — encrypted backup (config + users) */
+  r.post('/backup', requireAdmin, (req: Request, res: Response) => {
+    const { password } = req.body as { password?: string };
+    if (!password) {
+      res.status(400).json({ error: 'password required' });
+      return;
+    }
     try {
       const config = store.get();
       const users = userStore.listUsers();
@@ -213,39 +219,46 @@ export function configRoutes(store: ConfigStore, userStore: UserStore, requireAd
         config,
         users: { users, invites, settings: { everybodyCanRead } },
       };
-      res.json(backup);
+      const encrypted = encryptConfig(JSON.stringify(backup), password);
+      res.json({ encrypted });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
   });
 
-  /** POST /api/restore — restore from backup (works on fresh OR initialized instances) */
+  /** POST /api/restore — decrypt and restore from encrypted backup */
   r.post('/restore', (req: Request, res: Response) => {
-    // Allow without auth only on fresh instances (restore from scratch)
     const isFresh = !store.isInitialized();
     if (!isFresh) {
-      // On initialized instances, require admin auth
       const auth = req.headers.authorization;
       if (!auth?.startsWith('Bearer ')) {
         res.status(401).json({ error: 'Admin authentication required' });
         return;
       }
     }
-    const { backup } = req.body as { backup?: { config?: unknown; users?: { users?: unknown[]; invites?: unknown[]; settings?: { everybodyCanRead?: boolean } } } };
+    const { encrypted, password } = req.body as { encrypted?: string; password?: string };
+    if (!encrypted || !password) {
+      res.status(400).json({ error: 'encrypted and password required' });
+      return;
+    }
+    let backup: { config?: unknown; users?: { users?: unknown[]; invites?: unknown[]; settings?: { everybodyCanRead?: boolean } } };
+    try {
+      backup = JSON.parse(decryptConfig(encrypted, password));
+    } catch {
+      res.status(401).json({ error: 'Wrong password or corrupted backup' });
+      return;
+    }
     if (!backup?.config) {
       res.status(400).json({ error: 'Invalid backup format' });
       return;
     }
     try {
-      // Restore config
       const config = backup.config as import('../lib/types.js').VaultConfig;
       if (isFresh) {
-        // Fresh instance — init with the backup's storage mode, then overwrite with full config
         store.init(config.network, config.storageMode);
       }
       store.update(config);
 
-      // Restore users if present
       if (backup.users?.users && Array.isArray(backup.users.users)) {
         for (const u of backup.users.users as Array<{ address: string; role: 'admin' | 'user'; label: string }>) {
           if (!userStore.getUser(u.address)) {

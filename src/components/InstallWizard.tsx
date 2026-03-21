@@ -32,6 +32,8 @@ export function InstallWizard({ onComplete }: Props) {
   const [adminPasswordConfirm, setAdminPasswordConfirm] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [restoreMode, setRestoreMode] = useState(false);
+  const [restorePassword, setRestorePassword] = useState('');
 
   const handleConnectWallet = async () => {
     const wallet = (window as unknown as {
@@ -133,31 +135,44 @@ export function InstallWizard({ onComplete }: Props) {
             or
           </div>
 
-          <button className="btn btn-secondary btn-full" onClick={() => {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.accept = '.json';
-            input.onchange = async (e) => {
-              const file = (e.target as HTMLInputElement).files?.[0];
-              if (!file) return;
-              setLoading(true);
-              setError('');
-              try {
-                const text = await file.text();
-                const backup = JSON.parse(text);
-                if (!backup.config) throw new Error('Invalid backup file');
-                await restoreBackup(backup);
-                onComplete();
-              } catch (err) {
-                setError((err as Error).message);
-              } finally {
-                setLoading(false);
-              }
-            };
-            input.click();
-          }} disabled={loading}>
-            {loading ? <span className="spinner" /> : 'Restore from Backup'}
-          </button>
+          {!restoreMode ? (
+            <button className="btn btn-secondary btn-full" onClick={() => setRestoreMode(true)}>
+              Restore from Backup
+            </button>
+          ) : (
+            <div style={{ padding: 12, background: 'var(--bg-raised)', borderRadius: 'var(--radius)', border: '1px solid var(--border-dim)' }}>
+              <div className="form-row">
+                <label>
+                  Backup Password
+                  <input type="password" autoFocus value={restorePassword}
+                    onChange={e => setRestorePassword(e.target.value)}
+                    placeholder="Password used when creating the backup" />
+                </label>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-primary" style={{ flex: 1 }} disabled={loading || !restorePassword} onClick={() => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = '.enc,.json';
+                  input.onchange = async (e) => {
+                    const file = (e.target as HTMLInputElement).files?.[0];
+                    if (!file) return;
+                    setLoading(true); setError('');
+                    try {
+                      const encrypted = await file.text();
+                      await restoreBackup(encrypted, restorePassword);
+                      onComplete();
+                    } catch (err) { setError((err as Error).message); }
+                    finally { setLoading(false); }
+                  };
+                  input.click();
+                }}>
+                  {loading ? <span className="spinner" /> : 'Select Backup File'}
+                </button>
+                <button className="btn btn-secondary" onClick={() => { setRestoreMode(false); setError(''); }}>Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
