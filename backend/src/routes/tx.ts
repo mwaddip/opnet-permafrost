@@ -48,7 +48,15 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
   const r = Router();
 
   // Broadcast lock: messageHash → result (prevents double-broadcast)
-  const broadcastResults = new Map<string, { transactionId?: string; estimatedFees?: string; error?: string }>();
+  const broadcastResults = new Map<string, { transactionId?: string; estimatedFees?: string; error?: string; _ts?: number }>();
+
+  // Clean up old broadcast results every 10 minutes (keep for 1 hour)
+  setInterval(() => {
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    for (const [key, val] of broadcastResults) {
+      if ((val._ts ?? 0) < cutoff) broadcastResults.delete(key);
+    }
+  }, 10 * 60 * 1000);
 
   /** GET /api/tx/block-height — current block height */
   r.get('/block-height', async (_req: Request, res: Response) => {
@@ -216,7 +224,7 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
         return;
       }
       // Lock immediately to block concurrent requests
-      broadcastResults.set(messageHash, {});
+      broadcastResults.set(messageHash, { _ts: Date.now() });
     }
 
     // Convert params to proper types expected by OPNet SDK
@@ -294,7 +302,7 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
         transactionId: receipt.transactionId,
         estimatedFees: receipt.estimatedFees?.toString(),
       };
-      if (messageHash) broadcastResults.set(messageHash, result);
+      if (messageHash) broadcastResults.set(messageHash, { ...result, _ts: Date.now() });
 
       res.json({ success: true, ...result });
     } catch (e) {

@@ -88,11 +88,19 @@ export function hostingRoutes(store: ConfigStore, requireAdmin: RequestHandler, 
       httpsEnabled?: boolean;
     };
 
+    // Sanitize domain — only allow valid hostname characters
+    const cleanDomain = (domain || '').trim().replace(/[^a-zA-Z0-9.\-]/g, '');
+    // Sanitize path — only allow URL path characters, must start with /
+    let cleanPath = (path || '').trim().replace(/[^a-zA-Z0-9/\-_]/g, '');
+    if (cleanPath && !cleanPath.startsWith('/')) cleanPath = '/' + cleanPath;
+    // Sanitize port
+    const cleanPort = port && port > 0 && port <= 65535 ? port : undefined;
+
     try {
       const hosting: HostingConfig = {
-        domain: (domain || '').trim(),
-        port: port || undefined,
-        path: (path || '').trim() || undefined,
+        domain: cleanDomain,
+        port: cleanPort,
+        path: cleanPath || undefined,
         httpsEnabled: !!httpsEnabled,
         httpsStatus: httpsEnabled ? 'pending' : undefined,
       };

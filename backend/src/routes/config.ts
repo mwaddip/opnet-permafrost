@@ -2,7 +2,7 @@ import { Router, type Request, type Response, type RequestHandler } from 'expres
 import { ConfigStore } from '../lib/config-store.js';
 import type { UserStore } from '../lib/users.js';
 import { sanitizeConfig, type NetworkName, type StorageMode } from '../lib/types.js';
-import { hashPassword, verifyPassword, createToken } from '../lib/auth.js';
+import { hashPassword, verifyPassword, createToken, getTokenInfo } from '../lib/auth.js';
 import { encryptConfig, decryptConfig } from '../lib/encryption.js';
 
 export function configRoutes(store: ConfigStore, userStore: UserStore, requireAdmin: RequestHandler): Router {
@@ -133,6 +133,12 @@ export function configRoutes(store: ConfigStore, userStore: UserStore, requireAd
       res.status(400).json({ error: 'contracts must be an array' });
       return;
     }
+    for (const c of contracts) {
+      if (typeof c !== 'object' || !c) { res.status(400).json({ error: 'each contract must be an object' }); return; }
+      if (typeof c.name !== 'string' || !c.name) { res.status(400).json({ error: 'contract name required' }); return; }
+      if (typeof c.address !== 'string' || !c.address) { res.status(400).json({ error: 'contract address required' }); return; }
+      if (!Array.isArray(c.methods)) { res.status(400).json({ error: 'contract methods must be an array' }); return; }
+    }
     try {
       store.update({ contracts });
       res.json({ ok: true });
@@ -168,6 +174,11 @@ export function configRoutes(store: ConfigStore, userStore: UserStore, requireAd
   /** POST /api/dkg/save — save DKG ceremony result */
   r.post('/dkg/save', requireAdmin, (req: Request, res: Response) => {
     const { threshold, parties, level, combinedPubKey, shareData } = req.body;
+    if (typeof threshold !== 'number' || threshold < 1) { res.status(400).json({ error: 'invalid threshold' }); return; }
+    if (typeof parties !== 'number' || parties < threshold) { res.status(400).json({ error: 'invalid parties' }); return; }
+    if (typeof level !== 'number' || ![44, 65, 87, 128, 192, 256].includes(level)) { res.status(400).json({ error: 'invalid level' }); return; }
+    if (typeof combinedPubKey !== 'string' || !/^[0-9a-fA-F]+$/.test(combinedPubKey)) { res.status(400).json({ error: 'invalid combinedPubKey' }); return; }
+    if (typeof shareData !== 'string') { res.status(400).json({ error: 'invalid shareData' }); return; }
     try {
       const config = store.get();
       store.update({
@@ -193,6 +204,17 @@ export function configRoutes(store: ConfigStore, userStore: UserStore, requireAd
   /** POST /api/manifest — save manifest config */
   r.post('/manifest', requireAdmin, (req: Request, res: Response) => {
     const { manifestConfig } = req.body;
+    // Allow null (remove manifest) or validate structure
+    if (manifestConfig !== null && manifestConfig !== undefined) {
+      if (typeof manifestConfig !== 'object') { res.status(400).json({ error: 'manifestConfig must be an object or null' }); return; }
+      const mc = manifestConfig as Record<string, unknown>;
+      if (!mc.manifest || typeof mc.manifest !== 'object') { res.status(400).json({ error: 'manifestConfig.manifest required' }); return; }
+      const m = mc.manifest as Record<string, unknown>;
+      if (m.version !== 1) { res.status(400).json({ error: 'unsupported manifest version' }); return; }
+      if (typeof m.name !== 'string' || !m.name) { res.status(400).json({ error: 'manifest name required' }); return; }
+      if (!m.contracts || typeof m.contracts !== 'object') { res.status(400).json({ error: 'manifest contracts required' }); return; }
+      if (!Array.isArray(m.operations)) { res.status(400).json({ error: 'manifest operations required' }); return; }
+    }
     try {
       store.update({ manifestConfig });
       res.json({ ok: true });
@@ -230,9 +252,15 @@ export function configRoutes(store: ConfigStore, userStore: UserStore, requireAd
   r.post('/restore', (req: Request, res: Response) => {
     const isFresh = !store.isInitialized();
     if (!isFresh) {
+      // Require valid admin token on initialized instances
       const auth = req.headers.authorization;
       if (!auth?.startsWith('Bearer ')) {
         res.status(401).json({ error: 'Admin authentication required' });
+        return;
+      }
+      const tokenInfo = getTokenInfo(auth.slice(7));
+      if (!tokenInfo || (tokenInfo.role !== 'admin' && tokenInfo.role !== 'password-admin')) {
+        res.status(401).json({ error: 'Invalid or expired admin token' });
         return;
       }
     }

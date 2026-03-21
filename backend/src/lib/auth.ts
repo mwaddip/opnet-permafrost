@@ -218,3 +218,15 @@ export function createAuthMiddleware(store: ConfigStore, userStore: UserStore): 
 
   return { requireAdmin, requireUser, requireRead };
 }
+
+// ── Periodic cleanup of expired tokens and challenges ──
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, info] of tokens) {
+    if (now > info.expiresAt) tokens.delete(key);
+  }
+  for (const [key, c] of challenges) {
+    if (now > c.expiresAt) challenges.delete(key);
+  }
+}, 5 * 60 * 1000); // every 5 minutes
