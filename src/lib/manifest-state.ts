@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { readContract, getBlockHeight } from './api';
 import type { ManifestConfig, ManifestRead } from './manifest-types';
-import { resolveAbi } from './manifest';
 
 const POLL_INTERVAL = 30_000; // 30 seconds
 
@@ -31,8 +30,10 @@ export function useManifestState(config: ManifestConfig | null) {
         const address = config.addresses[contractKey];
         if (!address) return;
 
-        const abi = config.manifest.contracts[contractKey]?.abi;
-        const resolvedAbi = abi ? resolveAbi(abi) : undefined;
+        // Send raw ABI (may contain "OP_20" shorthands) — backend resolves them
+        // with proper output types from the opnet SDK
+        const rawAbi = config.manifest.contracts[contractKey]?.abi;
+        const abiArray = rawAbi ? (Array.isArray(rawAbi) ? rawAbi : [rawAbi]) : undefined;
 
         try {
           // Resolve parameterized reads (e.g., balanceOf with address from config)
@@ -43,7 +44,7 @@ export function useManifestState(config: ManifestConfig | null) {
             return undefined;
           }).filter(Boolean) as string[] | undefined;
 
-          const response = await readContract(address, def.method, resolvedAbi, callParams);
+          const response = await readContract(address, def.method, abiArray, callParams);
           const props = response.result;
           const firstKey = Object.keys(props)[0];
           results[key] = firstKey ? props[firstKey] : undefined;
