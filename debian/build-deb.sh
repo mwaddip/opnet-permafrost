@@ -35,7 +35,7 @@ mkdir -p "${STAGING}/DEBIAN"
 mkdir -p "${STAGING}/opt/permafrost"
 mkdir -p "${STAGING}/var/lib/permafrost"
 mkdir -p "${STAGING}/etc/systemd/system"
-mkdir -p "${STAGING}/etc/nginx/sites-available"
+mkdir -p "${STAGING}/etc/default"
 
 # ── Extract app files ──
 tar xzf "$TARBALL" -C "${STAGING}/opt/permafrost"
@@ -54,6 +54,14 @@ done
 # ── Systemd units ──
 cp "${PROJECT_DIR}/debian/permafrost.service" "${STAGING}/etc/systemd/system/"
 cp "${PROJECT_DIR}/debian/permafrost-relay.service" "${STAGING}/etc/systemd/system/"
+
+# ── Default env file (overwritten by postinst with debconf values) ──
+cat > "${STAGING}/etc/default/permafrost" <<EOF
+PORT=3100
+RELAY_PORT=3101
+DATA_DIR=/var/lib/permafrost
+NODE_ENV=production
+EOF
 
 # ── Build ──
 dpkg-deb --build "$STAGING"
