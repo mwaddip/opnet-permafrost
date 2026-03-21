@@ -84,11 +84,11 @@ export function OtziWordmark({ height = 40, className }: { height?: number; clas
   );
 }
 
-export function ThemeToggle() {
+export function ThemeToggle({ fixed }: { fixed?: boolean } = {}) {
   const [theme, setThemeState] = useState(getTheme);
   return (
     <button
-      className="theme-toggle"
+      className={`theme-toggle${fixed ? ' theme-toggle-fixed' : ''}`}
       onClick={() => setThemeState(toggleTheme())}
       title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
     >
@@ -207,9 +207,12 @@ export function App() {
     content = <SigningPage onSettings={() => setView('settings')} prefill={sendPrefill} onPrefillConsumed={() => setSendPrefill(null)} initialSessionCode={pendingSessionCode} />;
   }
 
+  // SigningPage has its own inline ThemeToggle in the header bar
+  const showGlobalToggle = view !== 'signing';
+
   return (
     <>
-      <ThemeToggle />
+      {showGlobalToggle && <ThemeToggle fixed />}
       {content}
     </>
   );
