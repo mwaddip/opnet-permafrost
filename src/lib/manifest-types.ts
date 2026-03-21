@@ -56,6 +56,11 @@ export interface ManifestOperation {
   params: ManifestParam[];
 }
 
+export interface ManifestParamOptions {
+  count: { contract: string; method: string };
+  item: { contract: string; method: string };
+}
+
 export interface ManifestParam {
   name: string;
   type: 'uint256' | 'address' | 'bool' | 'bytes';
@@ -63,6 +68,7 @@ export interface ManifestParam {
   scale?: number;
   placeholder?: string;
   source?: string;
+  options?: ManifestParamOptions;
 }
 
 // ── Conditions ──

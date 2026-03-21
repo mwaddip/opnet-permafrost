@@ -278,6 +278,34 @@
           "type": "string",
           "pattern": "^(contract|setting|read):.+$",
           "description": "Auto-fill source. 'contract:<key>' = address from settings. 'setting:<key>' = custom setting value. 'read:<key>' = value from reads. When set, the field is pre-filled and disabled."
+        },
+        "options": {
+          "type": "object",
+          "required": ["count", "item"],
+          "additionalProperties": false,
+          "description": "Dynamic dropdown populated from an indexed contract list. Renders a <select> instead of a text input.",
+          "properties": {
+            "count": {
+              "type": "object",
+              "required": ["contract", "method"],
+              "additionalProperties": false,
+              "description": "Read spec that returns the number of items (uint256).",
+              "properties": {
+                "contract": { "type": "string" },
+                "method": { "type": "string" }
+              }
+            },
+            "item": {
+              "type": "object",
+              "required": ["contract", "method"],
+              "additionalProperties": false,
+              "description": "Read spec that takes a uint256 index and returns one item.",
+              "properties": {
+                "contract": { "type": "string" },
+                "method": { "type": "string" }
+              }
+            }
+          }
         }
       }
     },
