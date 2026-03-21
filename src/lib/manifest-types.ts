@@ -12,7 +12,16 @@ export interface ProjectManifest {
   operations: ManifestOperation[];
 }
 
+export interface ManifestThemeColors {
+  accent?: string;
+  accentHover?: string;
+  bg?: string;
+}
+
 export interface ManifestTheme {
+  dark?: ManifestThemeColors;
+  light?: ManifestThemeColors;
+  // Legacy flat fields — treated as dark mode values
   accent?: string;
   accentHover?: string;
   bg?: string;

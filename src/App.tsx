@@ -154,9 +154,13 @@ export function App() {
         const theme = (cfg.manifestConfig as ManifestConfig | undefined)?.manifest?.theme;
         if (!theme) return;
         const root = document.documentElement;
-        if (theme.accent) { root.style.setProperty('--accent', theme.accent); applied = true; }
-        if (theme.accentHover) { root.style.setProperty('--accent-hover', theme.accentHover); applied = true; }
-        if (theme.bg) { root.style.setProperty('--bg', theme.bg); applied = true; }
+        const isDark = root.getAttribute('data-theme') !== 'light';
+        // Pick mode-specific colors, fall back to legacy flat fields (treated as dark)
+        const colors = (isDark ? theme.dark : theme.light)
+          || (isDark ? { accent: theme.accent, accentHover: theme.accentHover, bg: theme.bg } : null);
+        if (colors?.accent) { root.style.setProperty('--accent', colors.accent); applied = true; }
+        if (colors?.accentHover) { root.style.setProperty('--accent-hover', colors.accentHover); applied = true; }
+        if (colors?.bg) { root.style.setProperty('--bg', colors.bg); applied = true; }
         if (theme.radius) { root.style.setProperty('--radius', theme.radius); applied = true; }
       } catch { /* no manifest or config not loaded */ }
     };

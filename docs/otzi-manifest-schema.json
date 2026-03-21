@@ -59,15 +59,27 @@
     }
   },
   "$defs": {
-    "Theme": {
+    "ThemeColors": {
       "type": "object",
       "additionalProperties": false,
-      "description": "CSS variable overrides applied when this manifest is active.",
+      "description": "Color overrides for a specific theme mode.",
       "properties": {
         "accent": { "type": "string", "description": "Primary accent color (CSS color value). Also tints the Ötzi logo." },
         "accentHover": { "type": "string", "description": "Accent hover color." },
-        "bg": { "type": "string", "description": "Background color." },
-        "radius": { "type": "string", "description": "Border radius (e.g. '0px', '8px')." }
+        "bg": { "type": "string", "description": "Background color." }
+      }
+    },
+    "Theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "CSS variable overrides. Provide dark/light objects for mode-specific colors, or flat fields as legacy (applied to dark mode only).",
+      "properties": {
+        "dark": { "$ref": "#/$defs/ThemeColors", "description": "Colors applied in dark mode." },
+        "light": { "$ref": "#/$defs/ThemeColors", "description": "Colors applied in light mode." },
+        "accent": { "type": "string", "description": "Legacy: accent color (dark mode only). Prefer dark.accent." },
+        "accentHover": { "type": "string", "description": "Legacy: accent hover (dark mode only). Prefer dark.accentHover." },
+        "bg": { "type": "string", "description": "Legacy: background (dark mode only). Prefer dark.bg." },
+        "radius": { "type": "string", "description": "Border radius (e.g. '0px', '8px'). Applied to both modes." }
       }
     },
     "Contract": {
