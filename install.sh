@@ -22,6 +22,8 @@ die()   { err "$@"; exit 1; }
 # ── Argument parsing ────────────────────────────────────────────────────────
 MODE="download"
 YES=false
+BACKEND_PORT=3100
+DOMAIN=""
 
 usage() {
   cat <<'EOF'
@@ -31,11 +33,14 @@ Options:
   --build       Build from source instead of downloading a release
   --deps        Check and install build dependencies (Node 20, Go 1.23)
   --uninstall   Remove PERMAFROST Vault and its services
+  --port PORT   Backend port (default: 3100)
+  --domain NAME Domain name for nginx/apache config (default: localhost)
   --yes, -y     Skip confirmation prompts
   --help, -h    Show this help
 
 Examples:
   curl -sL https://github.com/mwaddip/otzi/releases/latest/download/install.sh | sudo bash
+  sudo ./install.sh --port 9080 --domain vault.example.com
   sudo ./install.sh --deps && sudo ./install.sh --build
   sudo ./install.sh --uninstall
 EOF
@@ -47,6 +52,8 @@ while [[ $# -gt 0 ]]; do
     --build)     MODE=build; shift ;;
     --deps)      MODE=deps; shift ;;
     --uninstall) MODE=uninstall; shift ;;
+    --port)      BACKEND_PORT="$2"; shift 2 ;;
+    --domain)    DOMAIN="$2"; shift 2 ;;
     --yes|-y)    YES=true; shift ;;
     --help|-h)   usage ;;
     *) die "Unknown option: $1 (use --help for usage)" ;;
@@ -309,6 +316,18 @@ do_build() {
 
 # ── Service setup ───────────────────────────────────────────────────────────
 setup_services() {
+  # Check port availability
+  if command -v ss &>/dev/null && ss -tlnp | grep -q ":${BACKEND_PORT} "; then
+    warn "Port ${BACKEND_PORT} is already in use"
+    if ! $YES; then
+      echo -en "${YELLOW}?${NC} Choose a different port [${BACKEND_PORT}]: "
+      read -r alt_port
+      [[ -n "$alt_port" ]] && BACKEND_PORT="$alt_port"
+    fi
+  fi
+
+  local relay_port=$((BACKEND_PORT + 1))
+
   # Create system user
   if ! id "$SERVICE_USER" &>/dev/null; then
     useradd --system --home-dir "$DATA_DIR" --shell /usr/sbin/nologin \
@@ -336,7 +355,7 @@ After=network.target
 [Service]
 Type=simple
 User=${SERVICE_USER}
-ExecStart=${INSTALL_DIR}/relay -addr :8081
+ExecStart=${INSTALL_DIR}/relay -addr :${relay_port}
 Restart=always
 RestartSec=5
 
@@ -356,8 +375,8 @@ Type=simple
 User=${SERVICE_USER}
 WorkingDirectory=${INSTALL_DIR}
 Environment=NODE_ENV=production
-Environment=PORT=8080
-Environment=RELAY_PORT=8081
+Environment=PORT=${BACKEND_PORT}
+Environment=RELAY_PORT=${relay_port}
 Environment=DATA_DIR=${DATA_DIR}
 ExecStart=${node_bin} backend/server.js
 Restart=always
@@ -371,7 +390,19 @@ EOF
   systemctl enable --now permafrost-relay permafrost
 
   ok "Services started: permafrost-relay, permafrost"
-  info "Backend listening on http://localhost:8080"
+  info "Backend listening on http://localhost:${BACKEND_PORT}"
+
+  # Health check
+  local retries=5
+  while [[ $retries -gt 0 ]]; do
+    if curl -sf "http://localhost:${BACKEND_PORT}/api/status" &>/dev/null; then
+      ok "Health check passed"
+      return 0
+    fi
+    retries=$((retries - 1))
+    sleep 2
+  done
+  warn "Health check failed — service may still be starting"
 }
 
 # ── Web server configuration ───────────────────────────────────────────────
@@ -393,20 +424,21 @@ configure_webserver() {
       return 0
     fi
 
-    cat > "$nginx_conf" <<'NGINX'
+    local server_name="${DOMAIN:-localhost}"
+    cat > "$nginx_conf" <<NGINX
 server {
     listen 80;
-    server_name _;
+    server_name ${server_name};
 
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:${BACKEND_PORT};
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 3600s;
     }
 }
@@ -457,15 +489,16 @@ NGINX
       return 0
     fi
 
-    cat > "$apache_conf" <<'APACHE'
+    cat > "$apache_conf" <<APACHE
 <VirtualHost *:80>
+    ServerName ${DOMAIN:-localhost}
     ProxyPreserveHost On
-    ProxyPass / http://127.0.0.1:8080/
-    ProxyPassReverse / http://127.0.0.1:8080/
+    ProxyPass / http://127.0.0.1:${BACKEND_PORT}/
+    ProxyPassReverse / http://127.0.0.1:${BACKEND_PORT}/
 
     RewriteEngine On
     RewriteCond %{HTTP:Upgrade} =websocket [NC]
-    RewriteRule /(.*) ws://127.0.0.1:8080/$1 [P,L]
+    RewriteRule /(.*) ws://127.0.0.1:${BACKEND_PORT}/\$1 [P,L]
 </VirtualHost>
 APACHE
     ok "Wrote ${apache_conf}"
@@ -488,14 +521,14 @@ APACHE
   echo ""
   warn "No web server detected (nginx or apache)"
   echo ""
-  echo "  PERMAFROST is running on http://localhost:8080"
+  echo "  PERMAFROST is running on http://localhost:${BACKEND_PORT}"
   echo ""
   echo "  To expose on port 80/443, install nginx or apache and re-run this script,"
   echo "  or use the Docker image which includes Caddy:"
   echo ""
   echo "    docker run -d -p 80:80 -v permafrost-data:/data ghcr.io/${REPO}:latest"
   echo ""
-  echo "  Manual proxy config: forward to http://127.0.0.1:8080"
+  echo "  Manual proxy config: forward to http://127.0.0.1:${BACKEND_PORT}"
   echo "  WebSocket path: /ws (requires upgrade headers)"
   echo ""
 }

@@ -44,7 +44,8 @@ jobs:
           cp -r dist staging/dist
           mkdir -p staging/backend
           cp -r backend/dist/* staging/backend/
-          cp -r backend/node_modules staging/backend/node_modules
+          # Dereference symlinks (workspace links like @btc-vision/post-quantum)
+          cp -rL backend/node_modules staging/backend/node_modules
           cp relay/relay staging/relay
           chmod +x staging/relay
           echo "${TAG#v}" > staging/version.txt
@@ -57,7 +58,7 @@ jobs:
           cp -r dist staging-win/dist
           mkdir -p staging-win/backend
           cp -r backend/dist/* staging-win/backend/
-          cp -r backend/node_modules staging-win/backend/node_modules
+          cp -rL backend/node_modules staging-win/backend/node_modules
           cp relay/relay.exe staging-win/relay.exe
           cp start.bat staging-win/start.bat
           echo "${TAG#v}" > staging-win/version.txt
