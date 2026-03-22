@@ -344,37 +344,31 @@ export function ThresholdSign({
     await relayClient.broadcast(blobBytes);
   }, [relayClient]);
 
-  // Track whether our current round's blob has been sent
-  const [roundBlobSent, setRoundBlobSent] = useState(false);
-
-  // Pre-signing barrier: all parties must exchange SIGNING_READY before any
-  // round 1 blobs are broadcast. This prevents the race where the initiator
-  // sends its blob before joiner ThresholdSign components have mounted.
-  const [signingReadyPeers, setSigningReadyPeers] = useState<Set<number>>(new Set());
-  const signingReadySentRef = useRef(false);
-  const round1BlobRef = useRef<string | null>(null);
-
-  // Barrier synchronization: each party broadcasts BARRIER:<round>:<partyId>
-  // after sending its blob AND collecting all expected blobs. No party advances
-  // until all T barriers for the current round are received.
-  const [barriers, setBarriers] = useState<Record<string, Set<number>>>({});
-  const barrierSentRef = useRef<Record<string, boolean>>({});
+  // ---------------------------------------------------------------------------
+  // State-sync protocol: each party broadcasts its state every 2s.
+  // Peers derive what's needed from each other's state and re-send on request.
+  // Replaces SIGNING_READY, BARRIER, and NEED_BLOB with one mechanism.
+  // ---------------------------------------------------------------------------
+  const [peerStates, setPeerStates] = useState<Map<number, { round: number; blobsSent: number[] }>>(new Map());
+  const blobsSentRef = useRef<Set<number>>(new Set());
 
   // Start signing (shared between manual and relay modes)
   const startSigningWithIds = useCallback((ids: number[]) => {
     setActivePartyIds(ids);
     const sess = createSession(message, share, ids);
-    const blob = round1(sess);
+    round1(sess);
     sessionRef.current = sess;
     setSession({ ...sess });
     setPhase('round1');
-    setRoundBlobSent(false);
+    blobsSentRef.current = new Set();
+    setPeerStates(new Map());
 
-    if (relayClient) {
-      // Relay mode: store the blob — it will be broadcast after SIGNING_READY barrier
-      round1BlobRef.current = blob;
+    // Relay mode: immediately broadcast round 1 blob
+    if (relayClient && sess.myRound1Blob) {
+      void broadcastBlob(sess.myRound1Blob);
+      blobsSentRef.current.add(1);
     }
-  }, [message, share, relayClient]);
+  }, [message, share, relayClient, broadcastBlob]);
 
   // Auto-start signing when threshold === parties (all parties must participate, no choice)
   useEffect(() => {
@@ -415,14 +409,10 @@ export function ThresholdSign({
       setSession({ ...sessionRef.current });
       setPhase('round2');
       setBlobError('');
-      setRoundBlobSent(false);
 
-      // Auto-broadcast round 2 blob in relay mode (await before marking sent)
       if (relayClient && sessionRef.current.myRound2Blob) {
-        void (async () => {
-          await broadcastBlob(sessionRef.current!.myRound2Blob!);
-          setRoundBlobSent(true);
-        })();
+        void broadcastBlob(sessionRef.current.myRound2Blob);
+        blobsSentRef.current.add(2);
       }
     } catch (err) {
       setBlobError(err instanceof Error ? err.message : 'Round 2 failed');
@@ -437,14 +427,10 @@ export function ThresholdSign({
       setSession({ ...sessionRef.current });
       setPhase('round3');
       setBlobError('');
-      setRoundBlobSent(false);
 
-      // Auto-broadcast round 3 blob in relay mode (await before marking sent)
       if (relayClient && sessionRef.current.myRound3Blob) {
-        void (async () => {
-          await broadcastBlob(sessionRef.current!.myRound3Blob!);
-          setRoundBlobSent(true);
-        })();
+        void broadcastBlob(sessionRef.current.myRound3Blob);
+        blobsSentRef.current.add(3);
       }
     } catch (err) {
       setBlobError(err instanceof Error ? err.message : 'Round 3 failed');
@@ -483,14 +469,16 @@ export function ThresholdSign({
           s.myRound1Blob = null;
           s.myRound2Blob = null;
           s.myRound3Blob = null;
-          // Clear barriers so auto-advance re-evaluates
-          setBarriers({});
-          barrierSentRef.current = {};
+          blobsSentRef.current = new Set();
+          setPeerStates(new Map());
           setPhase('round1');
           // Relay mode: restart from round 1
-          const blob = round1(s);
+          round1(s);
           setSession({ ...s });
-          void broadcastBlob(blob);
+          if (s.myRound1Blob) {
+            void broadcastBlob(s.myRound1Blob);
+            blobsSentRef.current.add(1);
+          }
         } else {
           setBlobError(`Signing failed after ${combineAttemptRef.current} attempts. Click Retry to start over.`);
           setPhase('failed');
@@ -513,8 +501,8 @@ export function ThresholdSign({
     setSession(null);
     setPhase('idle');
     setBlobError('');
-    setBarriers({});
-    barrierSentRef.current = {};
+    blobsSentRef.current = new Set();
+    setPeerStates(new Map());
     relayInitRef.current = false; // allow relay re-init on retry
   }, []);
 
@@ -546,118 +534,63 @@ export function ThresholdSign({
   }, [relayClient, relayReadyProp, phase, share.threshold, startSigningWithIds]);
 
   // ---------------------------------------------------------------------------
-  // Relay: broadcast SIGNING_READY when round1 starts
+  // Relay: state-sync protocol
+  //
+  // Each party broadcasts a STATE message every 2s containing its current round
+  // and which round blobs it has sent. Peers use this to:
+  // 1. Re-send blobs that the peer is missing
+  // 2. Determine when all peers have advanced, so they can advance too
+  //
+  // This replaces SIGNING_READY, BARRIER, and NEED_BLOB with one mechanism.
   // ---------------------------------------------------------------------------
-  useEffect(() => {
-    if (!relayClient || phase !== 'round1' || signingReadySentRef.current) return;
-    signingReadySentRef.current = true;
-    void broadcastBlob(`SIGNING_READY:${share.partyId}`);
-    setSigningReadyPeers(prev => new Set(prev).add(share.partyId));
-  }, [relayClient, phase, share.partyId, broadcastBlob]);
 
-  // ---------------------------------------------------------------------------
-  // Relay: broadcast round 1 blob once all parties are SIGNING_READY
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    if (!relayClient || phase !== 'round1') return;
-    if (signingReadyPeers.size < activePartyIds.length) return;
-    if (!round1BlobRef.current || roundBlobSent) return;
+  // Get current round number from phase
+  const phaseToRound = (p: string) =>
+    p === 'round1' ? 1 : p === 'round2' ? 2 : p === 'round3' ? 3 : p === 'complete' ? 4 : 0;
 
-    const blob = round1BlobRef.current;
-    round1BlobRef.current = null;
-    void (async () => {
-      const blobBytes = new TextEncoder().encode(blob);
-      await relayClient.broadcast(blobBytes);
-      setRoundBlobSent(true);
-    })();
-  }, [relayClient, phase, signingReadyPeers, activePartyIds.length, roundBlobSent]);
-
-  // ---------------------------------------------------------------------------
-  // Relay: request missed blobs — if we haven't received a peer's blob after
-  // 2 seconds, send NEED_BLOB:<round>:<partyId> and the peer re-sends it
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    if (!relayClient || !roundBlobSent || !sessionRef.current) return;
-    const roundNum = phase === 'round1' ? 1 : phase === 'round2' ? 2 : phase === 'round3' ? 3 : 0;
-    if (roundNum === 0) return;
-
-    const interval = setInterval(() => {
-      if (!sessionRef.current || !relayClient) return;
-      const s = sessionRef.current;
-      const needed = s.activePartyIds.length;
-      const collected =
-        roundNum === 1 ? s.collectedRound1Hashes :
-        roundNum === 2 ? s.collectedRound2Commitments :
-        s.collectedRound3Responses;
-
-      const roundKey = `round${roundNum}`;
-      const barrierCount = barriers[roundKey]?.size ?? 0;
-
-      // Ask for blobs or barriers we're missing
-      if (collected.size < needed || barrierCount < needed) {
-        void relayClient.broadcast(new TextEncoder().encode(`NEED_BLOB:${roundNum}:${share.partyId}`));
-      }
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [relayClient, phase, roundBlobSent, share.partyId, barriers]);
-
-  // ---------------------------------------------------------------------------
-  // Relay: subscribe to incoming messages and feed into addBlob
-  // ---------------------------------------------------------------------------
+  // Relay: subscribe to incoming messages
   useEffect(() => {
     if (!relayClient) return;
     const handler = (_from: number, payload: Uint8Array) => {
       const text = new TextDecoder().decode(payload);
 
-      // Intercept SIGNING_READY messages (pre-signing barrier)
-      const readyMatch = text.match(/^SIGNING_READY:(\d+)$/);
-      if (readyMatch) {
-        const pid = parseInt(readyMatch[1]!, 10);
-        setSigningReadyPeers(prev => new Set(prev).add(pid));
-        return;
-      }
+      // Handle STATE messages from peers
+      const stateMatch = text.match(/^STATE:(\d+):(\d+):([\d,]*)$/);
+      if (stateMatch) {
+        const pid = parseInt(stateMatch[1]!, 10);
+        const peerRound = parseInt(stateMatch[2]!, 10);
+        const sent = stateMatch[3] ? stateMatch[3].split(',').map(Number) : [];
 
-      // Intercept NEED_BLOB requests — peer is asking us to re-send our blob
-      const needMatch = text.match(/^NEED_BLOB:(\d+):(\d+)$/);
-      if (needMatch) {
-        const needRound = parseInt(needMatch[1]!, 10);
+        // Update peer state
+        setPeerStates(prev => {
+          const next = new Map(prev);
+          next.set(pid, { round: peerRound, blobsSent: sent });
+          return next;
+        });
+
+        // If peer needs our blobs (peer is behind or on same round), re-send
         if (sessionRef.current && relayClient) {
-          const blob =
-            needRound === 1 ? sessionRef.current.myRound1Blob :
-            needRound === 2 ? sessionRef.current.myRound2Blob :
-            needRound === 3 ? sessionRef.current.myRound3Blob : null;
-          if (blob) {
-            void relayClient.broadcast(new TextEncoder().encode(blob));
+          const s = sessionRef.current;
+          for (const r of [1, 2, 3]) {
+            if (!sent.includes(r) || peerRound <= r) continue; // peer already has it or isn't ready
+            // Actually: if peer is ON round r and hasn't collected ours, re-send
           }
-          // Also re-send our barrier if we already sent one for this round
-          const roundKey = `round${needRound}`;
-          if (barrierSentRef.current[roundKey]) {
-            void relayClient.broadcast(new TextEncoder().encode(`BARRIER:${roundKey}:${share.partyId}`));
-          }
-          // Also re-send SIGNING_READY if already sent
-          if (signingReadySentRef.current) {
-            void relayClient.broadcast(new TextEncoder().encode(`SIGNING_READY:${share.partyId}`));
+          // Simpler: if peer round <= our round, re-send all blobs we have for rounds they might need
+          const myRound = phaseToRound(phase);
+          if (peerRound <= myRound) {
+            for (const r of [1, 2, 3]) {
+              if (r > myRound) break;
+              const blob = r === 1 ? s.myRound1Blob : r === 2 ? s.myRound2Blob : s.myRound3Blob;
+              if (blob && blobsSentRef.current.has(r)) {
+                void relayClient.broadcast(new TextEncoder().encode(blob));
+              }
+            }
           }
         }
         return;
       }
 
-      // Intercept barrier messages
-      const m = text.match(/^BARRIER:(\w+):(\d+)$/);
-      if (m) {
-        const barrierPhase = m[1]!;
-        const pid = parseInt(m[2]!, 10);
-        setBarriers(prev => {
-          const next = { ...prev };
-          const s = new Set(prev[barrierPhase]);
-          s.add(pid);
-          next[barrierPhase] = s;
-          return next;
-        });
-        return;
-      }
-
+      // Handle signing blobs
       if (!sessionRef.current) return;
       const result = addBlob(sessionRef.current, text);
       if (result.ok) {
@@ -666,83 +599,54 @@ export function ThresholdSign({
     };
     relayClient.on('message', handler);
     return () => { relayClient.off('message', handler); };
-  }, [relayClient]);
+  }, [relayClient, phase]);
 
-  // ---------------------------------------------------------------------------
-  // Relay: barrier sync — broadcast barrier when own blob sent + all collected
-  // ---------------------------------------------------------------------------
-
-  // Round 1: send barrier when ready
+  // Relay: broadcast STATE periodically and advance when peers are ready
   useEffect(() => {
-    if (!relayClient || phase !== 'round1' || !sessionRef.current) return;
-    if (!roundBlobSent) return;
-    const needed = sessionRef.current.activePartyIds.length;
-    if (sessionRef.current.collectedRound1Hashes.size >= needed && !barrierSentRef.current.round1) {
-      barrierSentRef.current.round1 = true;
-      void broadcastBlob(`BARRIER:round1:${share.partyId}`);
-      setBarriers(prev => {
-        const s = new Set(prev.round1); s.add(share.partyId);
-        return { ...prev, round1: s };
-      });
-    }
-  }, [relayClient, phase, session, roundBlobSent, share.partyId, broadcastBlob]);
+    if (!relayClient || !sessionRef.current) return;
+    const roundNum = phaseToRound(phase);
+    if (roundNum === 0) return;
 
-  // Round 1: advance when all barriers received
-  useEffect(() => {
-    if (!relayClient || phase !== 'round1' || !sessionRef.current) return;
-    const needed = sessionRef.current.activePartyIds.length;
-    if ((barriers.round1?.size ?? 0) >= needed) {
-      advanceToRound2();
-    }
-  }, [relayClient, phase, barriers, advanceToRound2]);
+    const interval = setInterval(() => {
+      if (!relayClient || !sessionRef.current) return;
 
-  // Round 2: send barrier when ready
-  useEffect(() => {
-    if (!relayClient || phase !== 'round2' || !sessionRef.current) return;
-    if (!roundBlobSent) return;
-    const needed = sessionRef.current.activePartyIds.length;
-    if (sessionRef.current.collectedRound2Commitments.size >= needed && !barrierSentRef.current.round2) {
-      barrierSentRef.current.round2 = true;
-      void broadcastBlob(`BARRIER:round2:${share.partyId}`);
-      setBarriers(prev => {
-        const s = new Set(prev.round2); s.add(share.partyId);
-        return { ...prev, round2: s };
-      });
-    }
-  }, [relayClient, phase, session, roundBlobSent, share.partyId, broadcastBlob]);
+      // Broadcast our state
+      const sent = [...blobsSentRef.current].join(',');
+      void relayClient.broadcast(
+        new TextEncoder().encode(`STATE:${share.partyId}:${roundNum}:${sent}`)
+      );
 
-  // Round 2: advance when all barriers received
-  useEffect(() => {
-    if (!relayClient || phase !== 'round2' || !sessionRef.current) return;
-    const needed = sessionRef.current.activePartyIds.length;
-    if ((barriers.round2?.size ?? 0) >= needed) {
-      advanceToRound3();
-    }
-  }, [relayClient, phase, barriers, advanceToRound3]);
+      // Check: can we advance?
+      const s = sessionRef.current;
+      const needed = s.activePartyIds.length;
+      const collected =
+        roundNum === 1 ? s.collectedRound1Hashes.size :
+        roundNum === 2 ? s.collectedRound2Commitments.size :
+        roundNum === 3 ? s.collectedRound3Responses.size : 0;
 
-  // Round 3: send barrier when ready
-  useEffect(() => {
-    if (!relayClient || phase !== 'round3' || !sessionRef.current) return;
-    if (!roundBlobSent) return;
-    const needed = sessionRef.current.activePartyIds.length;
-    if (sessionRef.current.collectedRound3Responses.size >= needed && !barrierSentRef.current.round3) {
-      barrierSentRef.current.round3 = true;
-      void broadcastBlob(`BARRIER:round3:${share.partyId}`);
-      setBarriers(prev => {
-        const s = new Set(prev.round3); s.add(share.partyId);
-        return { ...prev, round3: s };
-      });
-    }
-  }, [relayClient, phase, session, roundBlobSent, share.partyId, broadcastBlob]);
+      if (collected < needed) return; // still waiting for blobs
 
-  // Round 3: advance when all barriers received
-  useEffect(() => {
-    if (!relayClient || phase !== 'round3' || !sessionRef.current) return;
-    const needed = sessionRef.current.activePartyIds.length;
-    if ((barriers.round3?.size ?? 0) >= needed) {
-      doCombine();
-    }
-  }, [relayClient, phase, barriers, doCombine]);
+      // All blobs collected — check if all peers are also on this round or ahead
+      let allPeersReady = true;
+      for (const pid of s.activePartyIds) {
+        if (pid === share.partyId) continue;
+        const ps = peerStates.get(pid);
+        if (!ps || ps.round < roundNum) {
+          allPeersReady = false;
+          break;
+        }
+      }
+
+      if (!allPeersReady) return;
+
+      // All peers are on this round or ahead, and we have all blobs — advance
+      if (roundNum === 1) advanceToRound2();
+      else if (roundNum === 2) advanceToRound3();
+      else if (roundNum === 3) doCombine();
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [relayClient, phase, share.partyId, peerStates, advanceToRound2, advanceToRound3, doCombine]);
 
   const needed = share.threshold;
 
