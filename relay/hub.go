@@ -248,6 +248,15 @@ func (h *Hub) handleRelay(conn *websocket.Conn, msg Msg, senderPartyID int, sess
 		return
 	}
 
+	target.mu.Lock()
+	targetConnected := target.Connected
+	targetHasConn := target.Conn != nil
+	target.mu.Unlock()
+
+	payloadLen := len(msg.Payload)
+	log.Printf("[relay] party %d → party %d (%d bytes) connected=%v hasConn=%v",
+		senderPartyID, *msg.To, payloadLen, targetConnected, targetHasConn)
+
 	sess.mu.Lock()
 	sess.LastActivity = time.Now()
 	sess.mu.Unlock()
@@ -289,6 +298,7 @@ func (h *Hub) sendTo(p *Party, msg Msg) {
 	p.mu.Unlock()
 
 	if conn == nil || !connected {
+		log.Printf("[sendTo] dropped msg to party %d: conn=%v connected=%v", p.ID, conn != nil, connected)
 		return
 	}
 
