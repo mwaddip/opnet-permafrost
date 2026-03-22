@@ -607,8 +607,9 @@ export function ThresholdSign({
       const result = addBlob(sessionRef.current, text);
       if (result.ok) {
         setSession({ ...sessionRef.current });
+      } else {
+        console.warn('[relay] addBlob rejected:', result.error, 'blob preview:', text.slice(0, 50));
       }
-      // Silently ignore invalid/duplicate blobs in relay mode
     };
     relayClient.on('message', handler);
     return () => { relayClient.off('message', handler); };
