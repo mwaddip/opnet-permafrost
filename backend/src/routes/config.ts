@@ -64,7 +64,9 @@ export function configRoutes(store: ConfigStore, userStore: UserStore, requireAd
 
       if (resolvedAuthMode === 'password') {
         store.update({ adminPasswordHash: hashPassword(adminPassword!), authMode: 'password' }, password);
-        res.json({ ok: true });
+        // Return a session token immediately — the admin just set the password
+        const token = createToken('password-admin');
+        res.json({ ok: true, token, role: 'password-admin' });
       } else {
         store.update({ authMode: 'wallet' }, password);
         userStore.addUser(walletAddress!, 'admin', walletLabel || 'Admin');
