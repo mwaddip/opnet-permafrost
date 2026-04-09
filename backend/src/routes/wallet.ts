@@ -62,7 +62,8 @@ export function walletRoutes(store: ConfigStore, requireAdmin: RequestHandler): 
         return;
       }
       const provider = getProvider(config.network);
-      const balance = await provider.getBalance(config.wallet.p2tr, true);
+      const balanceAddr = config.permafrost?.frostP2tr || config.wallet.p2tr;
+      const balance = await provider.getBalance(balanceAddr, true);
       res.json({ balance: balance.toString(), configured: true });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });

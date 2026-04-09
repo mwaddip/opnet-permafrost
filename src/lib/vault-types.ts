@@ -23,6 +23,9 @@ export interface PermafrostConfig {
   level: number;
   combinedPubKey: string;
   shareData: string;
+  frostAggregateKey?: string;
+  frostUntweakedAggregateKey?: string;
+  frostP2tr?: string;
 }
 
 export interface ContractConfig {

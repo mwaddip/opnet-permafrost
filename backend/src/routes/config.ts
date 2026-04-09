@@ -1,9 +1,11 @@
 import { Router, type Request, type Response, type RequestHandler } from 'express';
+import { payments, toXOnly } from '@btc-vision/bitcoin';
 import { ConfigStore } from '../lib/config-store.js';
 import type { UserStore } from '../lib/users.js';
 import { sanitizeConfig, type NetworkName, type StorageMode } from '../lib/types.js';
 import { hashPassword, verifyPassword, createToken, getTokenInfo } from '../lib/auth.js';
 import { encryptConfig, decryptConfig } from '../lib/encryption.js';
+import { generateWallet, generateMnemonic, getNetwork } from '../lib/opnet-client.js';
 
 export function configRoutes(store: ConfigStore, userStore: UserStore, requireAdmin: RequestHandler): Router {
   const r = Router();
@@ -175,18 +177,53 @@ export function configRoutes(store: ConfigStore, userStore: UserStore, requireAd
 
   /** POST /api/dkg/save — save DKG ceremony result */
   r.post('/dkg/save', requireAdmin, (req: Request, res: Response) => {
-    const { threshold, parties, level, combinedPubKey, shareData } = req.body;
+    const { threshold, parties, level, combinedPubKey, shareData, frostAggregateKey, frostUntweakedAggregateKey } = req.body;
     if (typeof threshold !== 'number' || threshold < 1) { res.status(400).json({ error: 'invalid threshold' }); return; }
     if (typeof parties !== 'number' || parties < threshold) { res.status(400).json({ error: 'invalid parties' }); return; }
     if (typeof level !== 'number' || ![44, 65, 87, 128, 192, 256].includes(level)) { res.status(400).json({ error: 'invalid level' }); return; }
     if (typeof combinedPubKey !== 'string' || !/^[0-9a-fA-F]+$/.test(combinedPubKey)) { res.status(400).json({ error: 'invalid combinedPubKey' }); return; }
     if (typeof shareData !== 'string') { res.status(400).json({ error: 'invalid shareData' }); return; }
+    const hexRe = /^[0-9a-fA-F]+$/;
+    if (frostAggregateKey !== undefined && (typeof frostAggregateKey !== 'string' || !hexRe.test(frostAggregateKey))) { res.status(400).json({ error: 'invalid frostAggregateKey' }); return; }
+    if (frostUntweakedAggregateKey !== undefined && (typeof frostUntweakedAggregateKey !== 'string' || !hexRe.test(frostUntweakedAggregateKey))) { res.status(400).json({ error: 'invalid frostUntweakedAggregateKey' }); return; }
     try {
       const config = store.get();
-      store.update({
-        permafrost: { threshold, parties, level, combinedPubKey, shareData },
+      const permafrost: Record<string, unknown> = {
+        threshold, parties, level, combinedPubKey, shareData,
+        ...(frostAggregateKey ? { frostAggregateKey } : {}),
+        ...(frostUntweakedAggregateKey ? { frostUntweakedAggregateKey } : {}),
+      };
+
+      const updates: Record<string, unknown> = {
+        permafrost,
         setupState: { ...config.setupState, dkgComplete: true },
-      });
+      };
+
+      // When FROST keys are present: compute p2tr and auto-generate throwaway wallet
+      if (frostAggregateKey) {
+        const network = getNetwork(config.network);
+        const aggKeyBuf = Buffer.from(frostAggregateKey as string, 'hex');
+        const internalXOnly = toXOnly(aggKeyBuf as never);
+        const { address: frostP2tr } = payments.p2tr({ internalPubkey: internalXOnly, network });
+        permafrost.frostP2tr = frostP2tr;
+
+        // Auto-generate throwaway keypair for SDK protocol-level sigs
+        if (!config.wallet) {
+          const phrase = generateMnemonic();
+          const { wallet, mnemonic } = generateWallet(phrase, config.network);
+          updates.wallet = {
+            mnemonic: phrase,
+            p2tr: wallet.p2tr,
+            tweakedPubKey: Buffer.from(wallet.tweakedPubKeyKey).toString('hex'),
+            publicKey: Buffer.from(wallet.publicKey).toString('hex'),
+          };
+          updates.setupState = { ...(updates.setupState as object), walletSkipped: false };
+          mnemonic.zeroize();
+          wallet.zeroize();
+        }
+      }
+
+      store.update(updates);
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });

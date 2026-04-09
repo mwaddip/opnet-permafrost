@@ -291,10 +291,13 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
       // Reconstruct wallet for protocol-level sigs (legacy sig, ML-DSA link proof)
       const { wallet, mnemonic } = generateWallet(config.wallet.mnemonic, config.network);
 
+      // Use FROST aggregate key for vault address when available
+      const btcTweakedPubKey = config.permafrost.frostAggregateKey || config.wallet.tweakedPubKey;
       const vaultAddr = Address.fromString(
         config.permafrost.combinedPubKey,
-        config.wallet.tweakedPubKey,
+        btcTweakedPubKey,
       );
+      const refundAddress = config.permafrost.frostP2tr || config.wallet.p2tr;
       const contract = getContract(contractAddr, contractAbi as never, provider, network, vaultAddr);
       const fn = (contract as unknown as Record<string, unknown>)[method];
       if (typeof fn !== 'function') {
@@ -342,7 +345,7 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
       const sendTxPromise = callResult.sendTransaction({
         signer: hybridSigner as never,
         mldsaSigner: thresholdSigner,
-        refundTo: config.wallet.p2tr,
+        refundTo: refundAddress,
         network,
         feeRate: TX_FEE_RATE,
         priorityFee: TX_PRIORITY_FEE,
