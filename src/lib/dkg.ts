@@ -30,7 +30,7 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
 
 // ── Blob envelope ──
 
-type BlobType = 'session' | 'p1' | 'p2pub' | 'p2priv' | 'p3priv' | 'p4';
+type BlobType = 'session' | 'p1' | 'p2pub' | 'p2priv' | 'p3priv' | 'p4' | 'frost-r1' | 'frost-r2';
 
 interface DKGBlobEnvelope {
   v: 2;
@@ -298,6 +298,114 @@ export function decodePhase4Broadcast(blob: string): DKGPhase4Broadcast | null {
     pos += N_COEFFS * 4;
   }
   return { partyId, aggregate };
+}
+
+// ── FROST DKG Round 1: Commitment broadcast ──
+// Layout: 1B partyId, 1B numCommitments, per commitment: 33B SEC1,
+//         33B proof.R (SEC1), 32B proof.z (bigint BE)
+
+export interface FrostRound1Package {
+  identifier: bigint;
+  commitment: Uint8Array[];   // t SEC1 points (33 bytes each)
+  proofOfKnowledge: { R: Uint8Array; z: bigint };
+}
+
+/** Convert 0-indexed partyId to 1-indexed FROST identifier (must be non-zero). */
+export function partyIdToFrostId(partyId: number): bigint {
+  return BigInt(partyId + 1);
+}
+
+/** Convert 1-indexed FROST identifier back to 0-indexed partyId. */
+export function frostIdToPartyId(id: bigint): number {
+  return Number(id) - 1;
+}
+
+function bigintTo32BE(n: bigint): Uint8Array {
+  const buf = new Uint8Array(32);
+  let val = n;
+  for (let i = 31; i >= 0; i--) {
+    buf[i] = Number(val & 0xffn);
+    val >>= 8n;
+  }
+  return buf;
+}
+
+function bigintFrom32BE(buf: Uint8Array): bigint {
+  let val = 0n;
+  for (let i = 0; i < 32; i++) {
+    val = (val << 8n) | BigInt(buf[i]!);
+  }
+  return val;
+}
+
+export function encodeFrostRound1(pkg: FrostRound1Package, sessionId: Uint8Array): string {
+  const partyId = frostIdToPartyId(pkg.identifier);
+  const numCommitments = pkg.commitment.length;
+  const size = 1 + 1 + numCommitments * 33 + 33 + 32;
+  const buf = new Uint8Array(size);
+  let pos = 0;
+  buf[pos++] = partyId;
+  buf[pos++] = numCommitments;
+  for (const c of pkg.commitment) {
+    buf.set(c, pos); pos += 33;
+  }
+  buf.set(pkg.proofOfKnowledge.R, pos); pos += 33;
+  buf.set(bigintTo32BE(pkg.proofOfKnowledge.z), pos);
+  return encodeEnvelope('frost-r1', partyId, -1, sessionId, buf);
+}
+
+export function decodeFrostRound1(blob: string): FrostRound1Package | null {
+  const env = decodeEnvelope(blob);
+  if (!env || env.type !== 'frost-r1') return null;
+  const data = fromHex(env.data);
+  let pos = 0;
+  const partyId = data[pos++]!;
+  const numCommitments = data[pos++]!;
+  const commitment: Uint8Array[] = [];
+  for (let i = 0; i < numCommitments; i++) {
+    commitment.push(data.slice(pos, pos + 33)); pos += 33;
+  }
+  const R = data.slice(pos, pos + 33); pos += 33;
+  const z = bigintFrom32BE(data.slice(pos, pos + 32));
+  return {
+    identifier: partyIdToFrostId(partyId),
+    commitment,
+    proofOfKnowledge: { R, z },
+  };
+}
+
+// ── FROST DKG Round 2: Private shares ──
+// Layout: 1B senderPartyId, 1B recipientPartyId, 32B signingShare (bigint BE)
+
+export interface FrostRound2Package {
+  sender: bigint;
+  recipient: bigint;
+  signingShare: bigint;
+}
+
+export function encodeFrostRound2(
+  pkg: FrostRound2Package,
+  sessionId: Uint8Array,
+): string {
+  const senderPartyId = frostIdToPartyId(pkg.sender);
+  const recipientPartyId = frostIdToPartyId(pkg.recipient);
+  const buf = new Uint8Array(1 + 1 + 32);
+  buf[0] = senderPartyId;
+  buf[1] = recipientPartyId;
+  buf.set(bigintTo32BE(pkg.signingShare), 2);
+  return encodeEnvelope('frost-r2', senderPartyId, recipientPartyId, sessionId, buf);
+}
+
+export function decodeFrostRound2(blob: string): FrostRound2Package | null {
+  const env = decodeEnvelope(blob);
+  if (!env || env.type !== 'frost-r2') return null;
+  const data = fromHex(env.data);
+  if (data.length < 34) return null;
+  return {
+    sender: partyIdToFrostId(data[0]!),
+    recipient: partyIdToFrostId(data[1]!),
+    signingShare: bigintFrom32BE(data.slice(2, 34)),
+  };
 }
 
 // ── Smart paste: identify any blob ──
