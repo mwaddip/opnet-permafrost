@@ -1,5 +1,5 @@
 import { Router, type Request, type Response, type RequestHandler } from 'express';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { Address, BinaryWriter } from '@btc-vision/transaction';
 import { toXOnly, tapTweakHash } from '@btc-vision/bitcoin';
 import { getContract, OP_20_ABI } from 'opnet';
@@ -56,6 +56,23 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
 
   // Broadcast lock: messageHash → result (prevents double-broadcast)
   const broadcastResults = new Map<string, { transactionId?: string; estimatedFees?: string; error?: string; _ts?: number }>();
+
+  // Pending FROST signing sessions: sighash request → FROST ceremony → broadcast
+  interface PendingFrostSession {
+    resolveSignatures: (sigs: Map<number, Uint8Array>) => void;
+    rejectSignatures: (err: Error) => void;
+    sendTxPromise: Promise<{ transactionId: string; estimatedFees?: bigint }>;
+    timeout: ReturnType<typeof setTimeout>;
+  }
+  const pendingFrostSessions = new Map<string, PendingFrostSession>();
+
+  function cleanupFrostSession(sessionId: string) {
+    const session = pendingFrostSessions.get(sessionId);
+    if (session) {
+      clearTimeout(session.timeout);
+      pendingFrostSessions.delete(sessionId);
+    }
+  }
 
   // Clean up old broadcast results every 10 minutes (keep for 1 hour)
   setInterval(() => {
@@ -233,8 +250,207 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
     }
   });
 
-  /** POST /api/tx/broadcast — build tx with ML-DSA sig and broadcast */
+  /** POST /api/tx/sighash — build OPNet tx, extract per-input sighashes for FROST ceremony */
+  r.post('/sighash', requireUser, async (req: Request, res: Response) => {
+    const { contract: contractAddr, method, params: rawParams, paramTypes, abi, signature, messageHash } = req.body as {
+      contract: string;
+      method: string;
+      params: unknown[];
+      paramTypes?: Array<'address' | 'u256' | 'bytes'>;
+      abi?: unknown;
+      signature: string;
+      messageHash?: string;
+    };
+
+    if (!signature || !/^[0-9a-fA-F]+$/.test(signature)) {
+      res.status(400).json({ error: 'invalid signature hex' });
+      return;
+    }
+
+    const params = (rawParams ?? []).map((val, i) => {
+      const t = paramTypes?.[i];
+      const s = String(val);
+      if (t === 'address') return Address.wrap(Buffer.from(s.replace(/^0[xX]/, ''), 'hex'));
+      if (t === 'u256') return BigInt(s);
+      return val;
+    });
+
+    try {
+      const config = store.get();
+      if (!config.wallet) { res.status(400).json({ error: 'No wallet configured' }); return; }
+      if (!config.permafrost) { res.status(400).json({ error: 'No DKG ceremony completed' }); return; }
+      if (!config.permafrost.frostAggregateKey || !config.permafrost.frostUntweakedAggregateKey) {
+        res.status(400).json({ error: 'No FROST keys configured — run DKG with V3 share files' });
+        return;
+      }
+
+      const provider = getProvider(config.network);
+      const network = getNetwork(config.network);
+      const contractAbi = resolveAbi(abi);
+
+      // Reconstruct wallet for protocol-level sigs (legacy sig, ML-DSA link proof)
+      const { wallet, mnemonic } = generateWallet(config.wallet.mnemonic, config.network);
+
+      const vaultAddr = Address.fromString(
+        config.permafrost.combinedPubKey,
+        config.wallet.tweakedPubKey,
+      );
+      const contract = getContract(contractAddr, contractAbi as never, provider, network, vaultAddr);
+      const fn = (contract as unknown as Record<string, unknown>)[method];
+      if (typeof fn !== 'function') {
+        mnemonic.zeroize();
+        wallet.zeroize();
+        res.status(400).json({ error: `Method '${method}' not found` });
+        return;
+      }
+
+      const callResult = await (fn as (...args: unknown[]) => Promise<{
+        revert?: string;
+        sendTransaction: (params: unknown) => Promise<{ transactionId: string; estimatedFees?: bigint }>;
+      }>).call(contract, ...(params ?? []));
+
+      if (callResult.revert) {
+        mnemonic.zeroize();
+        wallet.zeroize();
+        res.status(400).json({ error: `Simulation reverted: ${callResult.revert}` });
+        return;
+      }
+
+      const challenge = await provider.getChallenge();
+
+      // ML-DSA signer with pre-computed signature
+      const sigBytes = Buffer.from(signature, 'hex');
+      const pubKeyBytes = Buffer.from(config.permafrost.combinedPubKey, 'hex');
+      const thresholdSigner = new ThresholdMLDSASigner(sigBytes, pubKeyBytes);
+
+      // Two-phase FROST signer
+      const tweakedPubKey = Buffer.from(config.permafrost.frostAggregateKey, 'hex');
+      const untweakedPubKey = Buffer.from(config.permafrost.frostUntweakedAggregateKey, 'hex');
+      const internalXOnly = toXOnly(untweakedPubKey as never);
+
+      const { signer: frostSigner, sighashesPromise, resolveSignatures, rejectSignatures } =
+        FrostPsbtSigner.createTwoPhase(tweakedPubKey, internalXOnly, untweakedPubKey);
+
+      // Monkey-patch multiSignPsbt onto the wallet keypair
+      const hybridSigner = wallet.keypair as typeof wallet.keypair & {
+        multiSignPsbt: typeof frostSigner.multiSignPsbt;
+      };
+      (hybridSigner as unknown as Record<string, unknown>).multiSignPsbt =
+        frostSigner.multiSignPsbt.bind(frostSigner);
+
+      // Start sendTransaction — it will suspend at the FROST signing step
+      const sendTxPromise = callResult.sendTransaction({
+        signer: hybridSigner as never,
+        mldsaSigner: thresholdSigner,
+        refundTo: config.wallet.p2tr,
+        network,
+        feeRate: TX_FEE_RATE,
+        priorityFee: TX_PRIORITY_FEE,
+        maximumAllowedSatToSpend: TX_MAX_SAT_SPEND,
+        challenge,
+      });
+
+      // Handle early sendTransaction failure (before multiSignPsbt is reached)
+      sendTxPromise.catch(() => {});  // prevent unhandled rejection
+
+      // Race: sighashes extracted vs sendTransaction failed early
+      const sighashesOrError = await Promise.race([
+        sighashesPromise.then(hashes => ({ ok: true as const, hashes })),
+        sendTxPromise.then(
+          () => ({ ok: false as const, error: 'sendTransaction completed unexpectedly before sighash extraction' }),
+          (err: Error) => ({ ok: false as const, error: err.message }),
+        ),
+      ]);
+
+      if (!sighashesOrError.ok) {
+        mnemonic.zeroize();
+        wallet.zeroize();
+        res.status(500).json({ error: sighashesOrError.error });
+        return;
+      }
+
+      // Generate session ID and cache
+      const sessionId = randomBytes(16).toString('hex');
+      const timeout = setTimeout(() => {
+        rejectSignatures(new Error('FROST signing session timed out (5 min)'));
+        cleanupFrostSession(sessionId);
+        mnemonic.zeroize();
+        wallet.zeroize();
+      }, 5 * 60 * 1000);
+
+      pendingFrostSessions.set(sessionId, {
+        resolveSignatures,
+        rejectSignatures,
+        sendTxPromise,
+        timeout,
+      });
+
+      // Lock broadcast for this message hash
+      if (messageHash) {
+        broadcastResults.set(messageHash, { _ts: Date.now() });
+      }
+
+      const sighashesHex = sighashesOrError.hashes.map(h => ({
+        index: h.index,
+        hash: Buffer.from(h.hash).toString('hex'),
+        type: h.type,
+      }));
+
+      res.json({ sessionId, sighashes: sighashesHex });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  /** POST /api/tx/broadcast — build tx with ML-DSA sig and broadcast (or resolve FROST session) */
   r.post('/broadcast', requireUser, async (req: Request, res: Response) => {
+    // FROST session: resolve held sendTransaction with precomputed sigs
+    const { sessionId: frostSessionId, frostSignatures } = req.body as {
+      sessionId?: string;
+      frostSignatures?: Array<{ index: number; signature: string }>;
+    };
+
+    if (frostSessionId && frostSignatures) {
+      const session = pendingFrostSessions.get(frostSessionId);
+      if (!session) {
+        res.status(404).json({ error: 'FROST session not found or expired' });
+        return;
+      }
+
+      try {
+        const sigMap = new Map<number, Uint8Array>();
+        for (const fs of frostSignatures) {
+          if (typeof fs.signature !== 'string' || !/^[0-9a-fA-F]{128}$/.test(fs.signature)) {
+            res.status(400).json({ error: `Invalid FROST signature for index ${fs.index}` });
+            cleanupFrostSession(frostSessionId);
+            return;
+          }
+          sigMap.set(fs.index, Buffer.from(fs.signature, 'hex'));
+        }
+
+        session.resolveSignatures(sigMap);
+        const receipt = await session.sendTxPromise;
+        cleanupFrostSession(frostSessionId);
+
+        const result = {
+          transactionId: receipt.transactionId,
+          estimatedFees: receipt.estimatedFees?.toString(),
+        };
+
+        const mh = (req.body as Record<string, unknown>).messageHash as string | undefined;
+        if (mh) broadcastResults.set(mh, { ...result, _ts: Date.now() });
+
+        res.json({ success: true, ...result });
+      } catch (e) {
+        cleanupFrostSession(frostSessionId);
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error('[broadcast/frost] error:', msg, e);
+        res.status(500).json({ error: msg || 'FROST broadcast failed' });
+      }
+      return;
+    }
+
+    // Legacy path: single-keypair BTC signing
     const { contract: contractAddr, method, params: rawParams, paramTypes, abi, signature, messageHash } = req.body as {
       contract: string;
       method: string;
