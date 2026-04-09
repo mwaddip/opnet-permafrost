@@ -200,10 +200,10 @@ export function configRoutes(store: ConfigStore, userStore: UserStore, requireAd
       };
 
       // When FROST keys are present: compute p2tr and auto-generate throwaway wallet
-      if (frostAggregateKey) {
+      if (frostAggregateKey && frostUntweakedAggregateKey) {
         const network = getNetwork(config.network);
-        const aggKeyBuf = Buffer.from(frostAggregateKey as string, 'hex');
-        const internalXOnly = toXOnly(aggKeyBuf as never);
+        const untweakedBuf = Buffer.from(frostUntweakedAggregateKey as string, 'hex');
+        const internalXOnly = toXOnly(untweakedBuf as never);
         const { address: frostP2tr } = payments.p2tr({ internalPubkey: internalXOnly, network });
         permafrost.frostP2tr = frostP2tr;
 
