@@ -13,7 +13,7 @@
 
 import { useState, useReducer, useCallback, useRef, useEffect } from 'react';
 import { PasswordModal } from './PasswordModal';
-import { encryptShareV2, downloadShareFile, toHex } from '../lib/keygen';
+import { encryptShareV3, downloadShareFile, toHex } from '../lib/keygen';
 import {
   createDKGInstance,
   generateSessionId,
@@ -1260,12 +1260,14 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
 
   // ── Download handler ──
   const handleDownload = useCallback(async (password: string) => {
-    if (!state.share || !state.publicKey) return;
+    if (!state.share || !state.publicKey || !state.frostKeyPackage || !state.frostPublicKeyPackage) return;
     try {
       const { K, L } = getKL(state.level);
-      const shareFile = await encryptShareV2(
+      const shareFile = await encryptShareV3(
         state.share,
+        state.frostKeyPackage,
         toHex(state.publicKey),
+        toHex(state.frostPublicKeyPackage.verifyingKey),
         state.threshold,
         state.parties,
         state.level,
@@ -1294,7 +1296,7 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
       dispatch({ type: 'SET_ERROR', error: `Encryption failed: ${e instanceof Error ? e.message : String(e)}` });
       setShowPasswordModal(false);
     }
-  }, [state.share, state.publicKey, state.level, state.threshold, state.parties, onComplete]);
+  }, [state.share, state.publicKey, state.frostKeyPackage, state.frostPublicKeyPackage, state.level, state.threshold, state.parties, onComplete]);
 
   // ── Render ──
 

@@ -22,8 +22,10 @@
  */
 
 import type { ThresholdKeyShare, SecretShare } from '@btc-vision/post-quantum/threshold-ml-dsa.js';
+import type { KeyPackage as FrostKeyPackage } from 'frots';
 
 const SERIALIZE_VERSION = 0x02;
+const COMBINED_VERSION = 0x03;
 const N_COEFFS = 256;
 const Q = 8380417;
 const BITS_PER_COEFF = 23;
@@ -193,4 +195,103 @@ export function deserializeKeyShare(bytes: Uint8Array): {
     K,
     L,
   };
+}
+
+// ── FROST key package serialization ──
+// Layout:
+//   32B signingShare (bigint BE)
+//   33B verifyingShare (SEC1)
+//   33B verifyingKey (SEC1, post-tweak)
+//   1B  minSigners
+//   33B untweakedVerifyingKey (SEC1)
+//   32B untweakedSigningShare (bigint BE)
+//   33B untweakedVerifyingShare (SEC1)
+// Total: 197 bytes
+
+const FROST_KP_SIZE = 32 + 33 + 33 + 1 + 33 + 32 + 33; // 197
+
+function bigintTo32BE(n: bigint): Uint8Array {
+  const buf = new Uint8Array(32);
+  let val = n;
+  for (let i = 31; i >= 0; i--) {
+    buf[i] = Number(val & 0xffn);
+    val >>= 8n;
+  }
+  return buf;
+}
+
+function bigintFrom32BE(buf: Uint8Array): bigint {
+  let val = 0n;
+  for (let i = 0; i < 32; i++) val = (val << 8n) | BigInt(buf[i]!);
+  return val;
+}
+
+export function serializeFrostKeyPackage(kp: FrostKeyPackage): Uint8Array {
+  const buf = new Uint8Array(FROST_KP_SIZE);
+  let pos = 0;
+  buf.set(bigintTo32BE(kp.signingShare), pos); pos += 32;
+  buf.set(kp.verifyingShare, pos); pos += 33;
+  buf.set(kp.verifyingKey, pos); pos += 33;
+  buf[pos++] = kp.minSigners;
+  buf.set(kp.untweakedVerifyingKey, pos); pos += 33;
+  buf.set(bigintTo32BE(kp.untweakedSigningShare), pos); pos += 32;
+  buf.set(kp.untweakedVerifyingShare, pos);
+  return buf;
+}
+
+export function deserializeFrostKeyPackage(data: Uint8Array, identifier: bigint): FrostKeyPackage {
+  let pos = 0;
+  const signingShare = bigintFrom32BE(data.slice(pos, pos + 32)); pos += 32;
+  const verifyingShare = data.slice(pos, pos + 33); pos += 33;
+  const verifyingKey = data.slice(pos, pos + 33); pos += 33;
+  const minSigners = data[pos++]!;
+  const untweakedVerifyingKey = data.slice(pos, pos + 33); pos += 33;
+  const untweakedSigningShare = bigintFrom32BE(data.slice(pos, pos + 32)); pos += 32;
+  const untweakedVerifyingShare = data.slice(pos, pos + 33);
+  return {
+    identifier,
+    signingShare,
+    verifyingShare,
+    verifyingKey,
+    minSigners,
+    untweakedVerifyingKey,
+    untweakedSigningShare,
+    untweakedVerifyingShare,
+  };
+}
+
+// ── V3 combined format: ML-DSA + FROST in one blob ──
+// Layout: 1B version(0x03) + 4B mldsaLen(LE) + [mldsa bytes] + [frost bytes]
+
+export function serializeCombinedV3(
+  mldsaShare: ThresholdKeyShare,
+  frostKP: FrostKeyPackage,
+  K: number,
+  L: number,
+): Uint8Array {
+  const mldsa = serializeKeyShare(mldsaShare, K, L);
+  const frost = serializeFrostKeyPackage(frostKP);
+  const buf = new Uint8Array(1 + 4 + mldsa.length + frost.length);
+  buf[0] = COMBINED_VERSION;
+  const dv = new DataView(buf.buffer, 1, 4);
+  dv.setUint32(0, mldsa.length, true);
+  buf.set(mldsa, 5);
+  buf.set(frost, 5 + mldsa.length);
+  return buf;
+}
+
+export function deserializeCombinedV3(data: Uint8Array, frostIdentifier: bigint): {
+  mldsaShare: ThresholdKeyShare;
+  frostKeyPackage: FrostKeyPackage;
+  K: number;
+  L: number;
+} {
+  if (data[0] !== COMBINED_VERSION) throw new Error(`Expected V3 combined format, got version ${data[0]}`);
+  const dv = new DataView(data.buffer, data.byteOffset + 1, 4);
+  const mldsaLen = dv.getUint32(0, true);
+  const mldsaBytes = data.slice(5, 5 + mldsaLen);
+  const frostBytes = data.slice(5 + mldsaLen);
+  const { share, K, L } = deserializeKeyShare(mldsaBytes);
+  const frostKeyPackage = deserializeFrostKeyPackage(frostBytes, frostIdentifier);
+  return { mldsaShare: share, frostKeyPackage, K, L };
 }
