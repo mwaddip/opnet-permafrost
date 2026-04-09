@@ -681,28 +681,8 @@ export function ThresholdSign({
         const s = sessionRef.current;
         const myRound = phaseToRound(phase);
 
-        // Re-send blobs the peer might need for their current round
-        if (peerRound >= 1 && peerRound <= 3) {
-          const blob = peerRound === 1 ? s.myRound1Blob : peerRound === 2 ? s.myRound2Blob : s.myRound3Blob;
-          if (blob && blobsSentRef.current.has(peerRound)) {
-            void relayClient.broadcast(new TextEncoder().encode(blob));
-          }
-        }
-
-        // Joiner: follow the leader through rounds 1→2 and 2→3
-        // (round 3→complete is handled by COMPLETE message, not combine)
-        if (!isLeader && peerRound > myRound && myRound >= 1 && myRound <= 2) {
-          const needed = s.activePartyIds.length;
-          const collected =
-            myRound === 1 ? s.collectedRound1Hashes.size :
-            s.collectedRound2Commitments.size;
-          if (collected >= needed) {
-            if (myRound === 1) advanceToRound2();
-            else if (myRound === 2) advanceToRound3();
-          }
-        }
-
-        // Joiner: leader went back to round 1 (combine retry) — reset too
+        // Joiner: leader went back to round 1 (retry) — reset BEFORE re-send
+        // to avoid re-sending stale blobs from the previous attempt
         if (!isLeader && peerRound === 1 && myRound > 1) {
           const s2 = sessionRef.current;
           s2.round1State?.destroy();
@@ -725,6 +705,26 @@ export function ThresholdSign({
           if (s2.myRound1Blob) {
             void broadcastBlob(s2.myRound1Blob);
             blobsSentRef.current.add(1);
+          }
+        } else {
+          // Re-send blobs the peer might need for their current round
+          if (peerRound >= 1 && peerRound <= 3) {
+            const blob = peerRound === 1 ? s.myRound1Blob : peerRound === 2 ? s.myRound2Blob : s.myRound3Blob;
+            if (blob && blobsSentRef.current.has(peerRound)) {
+              void relayClient.broadcast(new TextEncoder().encode(blob));
+            }
+          }
+
+          // Joiner: follow the leader through rounds 1→2 and 2→3
+          if (!isLeader && peerRound > myRound && myRound >= 1 && myRound <= 2) {
+            const needed = s.activePartyIds.length;
+            const collected =
+              myRound === 1 ? s.collectedRound1Hashes.size :
+              s.collectedRound2Commitments.size;
+            if (collected >= needed) {
+              if (myRound === 1) advanceToRound2();
+              else if (myRound === 2) advanceToRound3();
+            }
           }
         }
 
