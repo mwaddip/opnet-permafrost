@@ -150,7 +150,7 @@ export function Settings({ onBack, onSend }: Props) {
               <>
                 <div style={{ marginBottom: 8 }}>
                   <strong style={{ fontSize: 13, color: 'var(--gray-light)' }}>P2TR Address</strong>
-                  <div className="pubkey-display" style={{ fontSize: 12, marginTop: 4 }}>{config.wallet.p2tr}</div>
+                  <div className="pubkey-display" style={{ fontSize: 12, marginTop: 4 }}>{config.permafrost?.frostP2tr || config.wallet.p2tr}</div>
                 </div>
                 <div>
                   <strong style={{ fontSize: 13, color: 'var(--gray-light)' }}>BTC Balance</strong>

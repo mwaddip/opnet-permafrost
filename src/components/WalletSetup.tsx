@@ -19,7 +19,7 @@ export function WalletSetup({ onComplete }: Props) {
     setError('');
     try {
       const result = await generateWallet();
-      setP2tr(result.config.wallet?.p2tr ?? null);
+      setP2tr(result.config.permafrost?.frostP2tr || (result.config.wallet?.p2tr ?? null));
       setMnemonic(result.mnemonic);
     } catch (e) {
       setError((e as Error).message);
