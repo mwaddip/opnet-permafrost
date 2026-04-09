@@ -305,9 +305,9 @@ export function decodePhase4Broadcast(blob: string): DKGPhase4Broadcast | null {
 //         33B proof.R (SEC1), 32B proof.z (bigint BE)
 
 export interface FrostRound1Package {
-  identifier: bigint;
-  commitment: Uint8Array[];   // t SEC1 points (33 bytes each)
-  proofOfKnowledge: { R: Uint8Array; z: bigint };
+  readonly identifier: bigint;
+  readonly commitment: readonly Uint8Array[];   // t SEC1 points (33 bytes each)
+  readonly proofOfKnowledge: { readonly R: Uint8Array; readonly z: bigint };
 }
 
 /** Convert 0-indexed partyId to 1-indexed FROST identifier (must be non-zero). */
@@ -378,9 +378,9 @@ export function decodeFrostRound1(blob: string): FrostRound1Package | null {
 // Layout: 1B senderPartyId, 1B recipientPartyId, 32B signingShare (bigint BE)
 
 export interface FrostRound2Package {
-  sender: bigint;
-  recipient: bigint;
-  signingShare: bigint;
+  readonly sender: bigint;
+  readonly recipient: bigint;
+  readonly signingShare: bigint;
 }
 
 export function encodeFrostRound2(

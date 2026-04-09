@@ -32,6 +32,12 @@ import {
   decodePhase3Private,
   encodePhase4Broadcast,
   decodePhase4Broadcast,
+  encodeFrostRound1,
+  decodeFrostRound1,
+  encodeFrostRound2,
+  decodeFrostRound2,
+  partyIdToFrostId,
+  frostIdToPartyId,
   identifyBlob,
   type DKGPhase1Broadcast,
   type DKGPhase1State,
@@ -40,8 +46,19 @@ import {
   type DKGPhase2FinalizeResult,
   type DKGPhase3Private,
   type DKGPhase4Broadcast,
+  type FrostRound1Package,
+  type FrostRound2Package,
   ThresholdMLDSA,
 } from '../lib/dkg';
+import {
+  dkgRound1 as frostDkgRound1,
+  dkgRound2 as frostDkgRound2,
+  dkgFinalize as frostDkgFinalize,
+  type Round1SecretPackage as FrostR1Secret,
+  type Round2SecretPackage as FrostR2Secret,
+  type KeyPackage as FrostKeyPackage,
+  type PublicKeyPackage as FrostPublicKeyPackage,
+} from 'frots';
 import { RelayClient } from '../lib/relay';
 import { sessionFingerprint } from '../lib/relay-crypto';
 import { RELAY_URL } from '../lib/api';
@@ -50,7 +67,7 @@ import { OtziWordmark } from '../App';
 
 // ── Types ──
 
-type Step = 'join' | 'commit' | 'reveal' | 'masks' | 'aggregate' | 'complete';
+type Step = 'join' | 'commit' | 'reveal' | 'masks' | 'aggregate' | 'frost-commit' | 'frost-shares' | 'complete';
 type Role = 'initiator' | 'joiner';
 type TransportMode = 'choose' | 'offline' | 'relay-create' | 'relay-join';
 
@@ -84,9 +101,21 @@ interface DKGState {
   myPhase4Blob: string | null;
   collectedPhase4: DKGPhase4Broadcast[];
 
+  // FROST DKG Round 1
+  frostR1Secret: FrostR1Secret | null;
+  myFrostR1Blob: string | null;
+  collectedFrostR1: FrostRound1Package[];
+
+  // FROST DKG Round 2
+  frostR2Secret: FrostR2Secret | null;
+  myFrostR2Blobs: Map<number, string>;
+  collectedFrostR2: FrostRound2Package[];
+
   // Result
   publicKey: Uint8Array | null;
   share: ThresholdKeyShare | null;
+  frostKeyPackage: FrostKeyPackage | null;
+  frostPublicKeyPackage: FrostPublicKeyPackage | null;
 
   // Bitmask setup
   bitmasks: readonly number[];
@@ -110,7 +139,12 @@ type Action =
   | { type: 'ADD_PHASE3_PRIV'; priv: DKGPhase3Private }
   | { type: 'SET_PHASE4'; blob: string; ownBroadcast: DKGPhase4Broadcast }
   | { type: 'ADD_PHASE4'; broadcast: DKGPhase4Broadcast }
+  | { type: 'SET_FROST_R1'; secret: FrostR1Secret; blob: string; ownPackage: FrostRound1Package }
+  | { type: 'ADD_FROST_R1'; pkg: FrostRound1Package }
+  | { type: 'SET_FROST_R2'; secret: FrostR2Secret; blobs: Map<number, string> }
+  | { type: 'ADD_FROST_R2'; pkg: FrostRound2Package }
   | { type: 'SET_RESULT'; publicKey: Uint8Array; share: ThresholdKeyShare }
+  | { type: 'SET_FROST_RESULT'; keyPackage: FrostKeyPackage; publicKeyPackage: FrostPublicKeyPackage }
   | { type: 'SET_ERROR'; error: string | null };
 
 const initialState: DKGState = {
@@ -134,8 +168,16 @@ const initialState: DKGState = {
   collectedPhase3Priv: [],
   myPhase4Blob: null,
   collectedPhase4: [],
+  frostR1Secret: null,
+  myFrostR1Blob: null,
+  collectedFrostR1: [],
+  frostR2Secret: null,
+  myFrostR2Blobs: new Map(),
+  collectedFrostR2: [],
   publicKey: null,
   share: null,
+  frostKeyPackage: null,
+  frostPublicKeyPackage: null,
   bitmasks: [],
   holdersOf: new Map(),
   error: null,
@@ -188,8 +230,24 @@ function reducer(state: DKGState, action: Action): DKGState {
       if (state.collectedPhase4.some(b => b.partyId === action.broadcast.partyId)) return state;
       return { ...state, collectedPhase4: [...state.collectedPhase4, action.broadcast] };
     }
+    case 'SET_FROST_R1': {
+      const prior = state.collectedFrostR1.filter(p => p.identifier !== action.ownPackage.identifier);
+      return { ...state, frostR1Secret: action.secret, myFrostR1Blob: action.blob, collectedFrostR1: [action.ownPackage, ...prior] };
+    }
+    case 'ADD_FROST_R1': {
+      if (state.collectedFrostR1.some(p => p.identifier === action.pkg.identifier)) return state;
+      return { ...state, collectedFrostR1: [...state.collectedFrostR1, action.pkg] };
+    }
+    case 'SET_FROST_R2':
+      return { ...state, frostR2Secret: action.secret, myFrostR2Blobs: action.blobs };
+    case 'ADD_FROST_R2': {
+      if (state.collectedFrostR2.some(p => p.sender === action.pkg.sender)) return state;
+      return { ...state, collectedFrostR2: [...state.collectedFrostR2, action.pkg] };
+    }
     case 'SET_RESULT':
       return { ...state, publicKey: action.publicKey, share: action.share };
+    case 'SET_FROST_RESULT':
+      return { ...state, frostKeyPackage: action.keyPackage, frostPublicKeyPackage: action.publicKeyPackage };
     case 'SET_ERROR':
       return { ...state, error: action.error };
   }
@@ -197,8 +255,8 @@ function reducer(state: DKGState, action: Action): DKGState {
 
 // ── Step labels and indices ──
 
-const STEPS: Step[] = ['join', 'commit', 'reveal', 'masks', 'aggregate', 'complete'];
-const STEP_LABELS = ['Join', 'Commit', 'Reveal', 'Masks', 'Aggregate', 'Complete'];
+const STEPS: Step[] = ['join', 'commit', 'reveal', 'masks', 'aggregate', 'frost-commit', 'frost-shares', 'complete'];
+const STEP_LABELS = ['Join', 'Commit', 'Reveal', 'Masks', 'Aggregate', 'FROST R1', 'FROST R2', 'Complete'];
 
 // ── Extracted sub-components (defined outside DKGWizard to avoid re-creation) ──
 
@@ -334,6 +392,8 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
   const [phase2Sent, setPhase2Sent] = useState(false);
   const [phase3Sent, setPhase3Sent] = useState(false);
   const [phase4Sent, setPhase4Sent] = useState(false);
+  const [frostR1Sent, setFrostR1Sent] = useState(false);
+  const [frostR2Sent, setFrostR2Sent] = useState(false);
 
   // Barrier synchronisation: parties don't advance until ALL parties confirm
   // they have sent their blob AND collected all expected blobs for the phase.
@@ -452,11 +512,31 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
         dispatch({ type: 'ADD_PHASE4', broadcast });
         break;
       }
+      case 'frost-r1': {
+        const pkg = decodeFrostRound1(text.trim());
+        if (!pkg) { dispatch({ type: 'SET_ERROR', error: 'Failed to decode FROST Round 1 blob' }); return; }
+        if (state.collectedFrostR1.some(p => p.identifier === pkg.identifier)) {
+          dispatch({ type: 'SET_ERROR', error: `Already have FROST R1 from Party ${frostIdToPartyId(pkg.identifier) + 1}` });
+          return;
+        }
+        dispatch({ type: 'ADD_FROST_R1', pkg });
+        break;
+      }
+      case 'frost-r2': {
+        const pkg = decodeFrostRound2(text.trim());
+        if (!pkg) { dispatch({ type: 'SET_ERROR', error: 'Failed to decode FROST Round 2 blob' }); return; }
+        if (state.collectedFrostR2.some(p => p.sender === pkg.sender)) {
+          dispatch({ type: 'SET_ERROR', error: `Already have FROST R2 from Party ${frostIdToPartyId(pkg.sender) + 1}` });
+          return;
+        }
+        dispatch({ type: 'ADD_FROST_R2', pkg });
+        break;
+      }
       default:
         dispatch({ type: 'SET_ERROR', error: `Unexpected blob type "${info.type}" for this step` });
     }
     setPasteValue('');
-  }, [sidPrefix, state.myPartyId, state.collectedPhase1, state.collectedPhase2Pub, state.collectedPhase2Priv, state.collectedPhase3Priv, state.collectedPhase4]);
+  }, [sidPrefix, state.myPartyId, state.collectedPhase1, state.collectedPhase2Pub, state.collectedPhase2Priv, state.collectedPhase3Priv, state.collectedPhase4, state.collectedFrostR1, state.collectedFrostR2]);
 
   // ── Silent paste handler for relay (no error dispatch, returns success boolean) ──
   const handleRelayBlob = useCallback((text: string): boolean => {
@@ -503,10 +583,24 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
         dispatch({ type: 'ADD_PHASE4', broadcast });
         return true;
       }
+      case 'frost-r1': {
+        const pkg = decodeFrostRound1(text.trim());
+        if (!pkg) return false;
+        if (state.collectedFrostR1.some(p => p.identifier === pkg.identifier)) return false;
+        dispatch({ type: 'ADD_FROST_R1', pkg });
+        return true;
+      }
+      case 'frost-r2': {
+        const pkg = decodeFrostRound2(text.trim());
+        if (!pkg) return false;
+        if (state.collectedFrostR2.some(p => p.sender === pkg.sender)) return false;
+        dispatch({ type: 'ADD_FROST_R2', pkg });
+        return true;
+      }
       default:
         return false;
     }
-  }, [sidPrefix, state.myPartyId, state.collectedPhase1, state.collectedPhase2Pub, state.collectedPhase2Priv, state.collectedPhase3Priv, state.collectedPhase4]);
+  }, [sidPrefix, state.myPartyId, state.collectedPhase1, state.collectedPhase2Pub, state.collectedPhase2Priv, state.collectedPhase3Priv, state.collectedPhase4, state.collectedFrostR1, state.collectedFrostR2]);
 
   // ════════════════════════════════════════════════════════════════════
   // RELAY: subscribe to incoming messages
@@ -993,6 +1087,131 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
   useEffect(() => {
     if (!isRelayMode || state.step !== 'aggregate') return;
     if ((barriers.aggregate?.size ?? 0) >= state.parties) {
+      dispatch({ type: 'SET_STEP', step: 'frost-commit' });
+    }
+  }, [isRelayMode, state.step, barriers, state.parties]);
+
+  // ════════════════════════════════════════════════════════════════════
+  // STEP: FROST-COMMIT (FROST DKG Round 1)
+  // ════════════════════════════════════════════════════════════════════
+
+  const frostR1Computed = useRef(false);
+
+  useEffect(() => {
+    if (state.step !== 'frost-commit' || frostR1Computed.current) return;
+    if (!state.sessionId) return;
+    frostR1Computed.current = true;
+    try {
+      const id = partyIdToFrostId(state.myPartyId);
+      const rng = { fillBytes: (dest: Uint8Array) => crypto.getRandomValues(dest) };
+      const { secretPackage, package: pkg } = frostDkgRound1(id, state.parties, state.threshold, rng);
+      const blob = encodeFrostRound1(pkg, state.sessionId);
+      dispatch({ type: 'SET_FROST_R1', secret: secretPackage, blob, ownPackage: pkg });
+    } catch (e) {
+      frostR1Computed.current = false;
+      dispatch({ type: 'SET_ERROR', error: `FROST Round 1 failed: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }, [state.step, state.sessionId, state.myPartyId, state.parties, state.threshold]);
+
+  // Relay: auto-broadcast FROST R1 blob
+  const frostR1BlobSending = useRef(false);
+  useEffect(() => {
+    if (!isRelayMode || !state.myFrostR1Blob || frostR1BlobSending.current || frostR1Sent) return;
+    frostR1BlobSending.current = true;
+    void (async () => {
+      await relaySendBlob(state.myFrostR1Blob!);
+      setFrostR1Sent(true);
+    })();
+  }, [isRelayMode, state.myFrostR1Blob, frostR1Sent, relaySendBlob]);
+
+  const frostR1Ready = state.collectedFrostR1.length === state.parties;
+
+  // Relay: barrier
+  useEffect(() => {
+    if (!isRelayMode || state.step !== 'frost-commit') return;
+    if (frostR1Ready && frostR1Sent && !barrierSentRef.current['frost-commit']) {
+      barrierSentRef.current['frost-commit'] = true;
+      void relaySendBlob(`BARRIER:frost-commit:${state.myPartyId}`);
+      setBarriers(prev => {
+        const s = new Set(prev['frost-commit']); s.add(state.myPartyId);
+        return { ...prev, 'frost-commit': s };
+      });
+    }
+  }, [isRelayMode, state.step, frostR1Ready, frostR1Sent, state.collectedFrostR1.length, state.myPartyId, relaySendBlob]);
+
+  // Relay: auto-advance
+  useEffect(() => {
+    if (!isRelayMode || state.step !== 'frost-commit') return;
+    if ((barriers['frost-commit']?.size ?? 0) >= state.parties) {
+      dispatch({ type: 'SET_STEP', step: 'frost-shares' });
+    }
+  }, [isRelayMode, state.step, barriers, state.parties]);
+
+  // ════════════════════════════════════════════════════════════════════
+  // STEP: FROST-SHARES (FROST DKG Round 2)
+  // ════════════════════════════════════════════════════════════════════
+
+  const frostR2Computed = useRef(false);
+
+  useEffect(() => {
+    if (state.step !== 'frost-shares' || frostR2Computed.current) return;
+    if (!state.frostR1Secret || !state.sessionId) return;
+    if (state.collectedFrostR1.length !== state.parties) return;
+    frostR2Computed.current = true;
+    try {
+      // Build the received map (all parties' Round1Packages, keyed by FROST identifier)
+      const received = new Map<bigint, FrostRound1Package>();
+      for (const pkg of state.collectedFrostR1) {
+        if (pkg.identifier !== partyIdToFrostId(state.myPartyId)) {
+          received.set(pkg.identifier, pkg);
+        }
+      }
+      const { secretPackage, packages } = frostDkgRound2(state.frostR1Secret, received);
+      const blobs = new Map<number, string>();
+      for (const [recipientId, pkg] of packages) {
+        const targetPartyId = frostIdToPartyId(recipientId);
+        blobs.set(targetPartyId, encodeFrostRound2(pkg, state.sessionId));
+      }
+      dispatch({ type: 'SET_FROST_R2', secret: secretPackage, blobs });
+    } catch (e) {
+      frostR2Computed.current = false;
+      dispatch({ type: 'SET_ERROR', error: `FROST Round 2 failed: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }, [state.step, state.frostR1Secret, state.sessionId, state.myPartyId, state.collectedFrostR1, state.parties]);
+
+  // Relay: auto-send FROST R2 private blobs
+  const frostR2BlobsSending = useRef(false);
+  useEffect(() => {
+    if (!isRelayMode || state.myFrostR2Blobs.size === 0 || frostR2BlobsSending.current || frostR2Sent) return;
+    frostR2BlobsSending.current = true;
+    void (async () => {
+      for (const [targetId, blob] of state.myFrostR2Blobs) {
+        await relaySendBlob(blob, targetId);
+      }
+      setFrostR2Sent(true);
+    })();
+  }, [isRelayMode, state.myFrostR2Blobs, frostR2Sent, relaySendBlob]);
+
+  // Expected: one Round2Package from each other party
+  const frostR2Ready = state.collectedFrostR2.length === state.parties - 1;
+
+  // Relay: barrier
+  useEffect(() => {
+    if (!isRelayMode || state.step !== 'frost-shares') return;
+    if (frostR2Ready && frostR2Sent && !barrierSentRef.current['frost-shares']) {
+      barrierSentRef.current['frost-shares'] = true;
+      void relaySendBlob(`BARRIER:frost-shares:${state.myPartyId}`);
+      setBarriers(prev => {
+        const s = new Set(prev['frost-shares']); s.add(state.myPartyId);
+        return { ...prev, 'frost-shares': s };
+      });
+    }
+  }, [isRelayMode, state.step, frostR2Ready, frostR2Sent, state.collectedFrostR2.length, state.myPartyId, relaySendBlob]);
+
+  // Relay: auto-advance
+  useEffect(() => {
+    if (!isRelayMode || state.step !== 'frost-shares') return;
+    if ((barriers['frost-shares']?.size ?? 0) >= state.parties) {
       dispatch({ type: 'SET_STEP', step: 'complete' });
     }
   }, [isRelayMode, state.step, barriers, state.parties]);
@@ -1006,8 +1225,10 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
   useEffect(() => {
     if (state.step !== 'complete' || finalizeComputed.current) return;
     if (!state.instance || !state.phase2FinalResult) return;
+    if (!state.frostR2Secret) return;
     finalizeComputed.current = true;
     try {
+      // ML-DSA finalize
       const sortedPh4 = [...state.collectedPhase4].sort((a, b) => a.partyId - b.partyId);
       const { publicKey, share } = state.instance.dkgFinalize(
         state.myPartyId,
@@ -1016,11 +1237,26 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
         state.phase2FinalResult.shares,
       );
       dispatch({ type: 'SET_RESULT', publicKey, share });
+
+      // FROST finalize
+      const receivedR1 = new Map<bigint, FrostRound1Package>();
+      for (const pkg of state.collectedFrostR1) {
+        if (pkg.identifier !== partyIdToFrostId(state.myPartyId)) {
+          receivedR1.set(pkg.identifier, pkg);
+        }
+      }
+      const receivedR2 = new Map<bigint, FrostRound2Package>();
+      for (const pkg of state.collectedFrostR2) {
+        receivedR2.set(pkg.sender, pkg);
+      }
+      const { keyPackage, publicKeyPackage } = frostDkgFinalize(state.frostR2Secret, receivedR1, receivedR2);
+      dispatch({ type: 'SET_FROST_RESULT', keyPackage, publicKeyPackage });
     } catch (e) {
       finalizeComputed.current = false;
       dispatch({ type: 'SET_ERROR', error: `Finalize failed: ${e instanceof Error ? e.message : String(e)}` });
     }
-  }, [state.step, state.instance, state.myPartyId, state.phase2FinalResult, state.collectedPhase4]);
+  }, [state.step, state.instance, state.myPartyId, state.phase2FinalResult, state.collectedPhase4,
+      state.frostR2Secret, state.collectedFrostR1, state.collectedFrostR2]);
 
   // ── Download handler ──
   const handleDownload = useCallback(async (password: string) => {
@@ -1070,8 +1306,8 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
       <h1 style={{ textAlign: 'center', fontSize: 18, fontWeight: 500, marginBottom: 0 }}>DKG Ceremony</h1>
       <p className="subtitle">
         {state.step === 'join'
-          ? 'Distributed threshold ML-DSA key generation'
-          : `Distributed ${state.threshold}-of-${state.parties} threshold ML-DSA key generation`}
+          ? 'Distributed threshold key generation (ML-DSA + FROST)'
+          : `Distributed ${state.threshold}-of-${state.parties} threshold key generation`}
       </p>
 
       {/* Step dots */}
@@ -1085,7 +1321,7 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
       </div>
 
       {/* Do not refresh warning */}
-      {stepIndex > 0 && stepIndex < 5 && (
+      {stepIndex > 0 && stepIndex < STEPS.length - 1 && (
         <div className="warning">
           Do not refresh this page — all ceremony state is held in memory.
         </div>
@@ -1810,12 +2046,144 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
               <button
                 className="btn btn-primary btn-full"
                 style={{ marginTop: 16 }}
-                onClick={() => dispatch({ type: 'SET_STEP', step: 'complete' })}
+                onClick={() => dispatch({ type: 'SET_STEP', step: 'frost-commit' })}
                 disabled={!phase4Ready}
               >
                 {phase4Ready
-                  ? 'Finalize Ceremony'
+                  ? 'Continue to FROST Key Generation'
                   : `Waiting for ${state.parties - state.collectedPhase4.length} more aggregate(s)`}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ═══════ STEP: FROST-COMMIT (FROST DKG Round 1) ═══════ */}
+      {state.step === 'frost-commit' && (
+        <div className="card">
+          <h2>FROST Round 1: Commitments</h2>
+          {isRelayMode ? (
+            <p>Generating and exchanging FROST key commitments via relay...</p>
+          ) : (
+            <p>Each party generates FROST key material and broadcasts their commitment.</p>
+          )}
+
+          {!state.myFrostR1Blob && (
+            <div style={{ textAlign: 'center', padding: 20 }}>
+              <div className="spinner" style={{ margin: '0 auto 12px' }} />
+              <p>Computing FROST Round 1...</p>
+            </div>
+          )}
+
+          {state.myFrostR1Blob && isRelayMode && (
+            <>
+              <PartyTracker
+                collected={state.collectedFrostR1.map(p => frostIdToPartyId(p.identifier))}
+                total={state.parties}
+                myPartyId={state.myPartyId}
+                label="FROST Commitments"
+              />
+              {!frostR1Ready && (
+                <RelayPhaseProgress
+                  phase="FROST R1"
+                  collected={state.collectedFrostR1.length}
+                  total={state.parties}
+                  label="commitments received"
+                />
+              )}
+            </>
+          )}
+
+          {state.myFrostR1Blob && !isRelayMode && (
+            <>
+              <BlobOutput blob={state.myFrostR1Blob} label="My FROST Commitment (send to everyone)" onCopy={copyToClipboard} copiedLabel={copied} />
+              <PartyTracker
+                collected={state.collectedFrostR1.map(p => frostIdToPartyId(p.identifier))}
+                total={state.parties}
+                myPartyId={state.myPartyId}
+                label="FROST Commitments"
+              />
+              <PasteArea value={pasteValue} onChange={setPasteValue} onProcess={handlePaste} />
+              <button
+                className="btn btn-primary btn-full"
+                style={{ marginTop: 16 }}
+                onClick={() => dispatch({ type: 'SET_STEP', step: 'frost-shares' })}
+                disabled={!frostR1Ready}
+              >
+                {frostR1Ready
+                  ? 'Continue to FROST Share Distribution'
+                  : `Waiting for ${state.parties - state.collectedFrostR1.length} more commitment(s)`}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ═══════ STEP: FROST-SHARES (FROST DKG Round 2) ═══════ */}
+      {state.step === 'frost-shares' && (
+        <div className="card">
+          <h2>FROST Round 2: Share Distribution</h2>
+          {isRelayMode ? (
+            <p>Exchanging FROST secret shares via relay...</p>
+          ) : (
+            <p>Send each party their private FROST share. These are secret — share only with the named recipient.</p>
+          )}
+
+          {state.myFrostR2Blobs.size === 0 && (
+            <div style={{ textAlign: 'center', padding: 20 }}>
+              <div className="spinner" style={{ margin: '0 auto 12px' }} />
+              <p>Computing FROST Round 2...</p>
+            </div>
+          )}
+
+          {state.myFrostR2Blobs.size > 0 && isRelayMode && (
+            <>
+              <PartyTracker
+                collected={state.collectedFrostR2.map(p => frostIdToPartyId(p.sender))}
+                total={state.parties}
+                myPartyId={state.myPartyId}
+                label="FROST Shares"
+              />
+              {!frostR2Ready && (
+                <RelayPhaseProgress
+                  phase="FROST R2"
+                  collected={state.collectedFrostR2.length}
+                  total={state.parties - 1}
+                  label="shares received"
+                />
+              )}
+            </>
+          )}
+
+          {state.myFrostR2Blobs.size > 0 && !isRelayMode && (
+            <>
+              {[...state.myFrostR2Blobs.entries()].map(([targetId, blob]) => (
+                <BlobOutput
+                  key={targetId}
+                  blob={blob}
+                  label={`FROST Share for Party ${targetId + 1}`}
+                  isPrivate
+                  targetParty={targetId}
+                  onCopy={copyToClipboard}
+                  copiedLabel={copied}
+                />
+              ))}
+              <PartyTracker
+                collected={state.collectedFrostR2.map(p => frostIdToPartyId(p.sender))}
+                total={state.parties}
+                myPartyId={state.myPartyId}
+                label="FROST Shares"
+              />
+              <PasteArea value={pasteValue} onChange={setPasteValue} onProcess={handlePaste} />
+              <button
+                className="btn btn-primary btn-full"
+                style={{ marginTop: 16 }}
+                onClick={() => dispatch({ type: 'SET_STEP', step: 'complete' })}
+                disabled={!frostR2Ready}
+              >
+                {frostR2Ready
+                  ? 'Finalize Ceremony'
+                  : `Waiting for ${state.parties - 1 - state.collectedFrostR2.length} more share(s)`}
               </button>
             </>
           )}
@@ -1827,18 +2195,19 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
         <div className="card">
           <h2>Ceremony Complete</h2>
 
-          {!state.publicKey && (
+          {(!state.publicKey || !state.frostKeyPackage) && (
             <div style={{ textAlign: 'center', padding: 20 }}>
               <div className="spinner" style={{ margin: '0 auto 12px' }} />
               <p>Finalizing key derivation...</p>
             </div>
           )}
 
-          {state.publicKey && state.share && (
+          {state.publicKey && state.share && state.frostKeyPackage && state.frostPublicKeyPackage && (
             <>
               <div className="success-box">
-                Dealerless DKG complete. No single party ever had access to the full
-                secret key. Each party holds only their own threshold share.
+                Unified DKG complete. Both ML-DSA (post-quantum contract signing) and
+                FROST (threshold BTC wallet) keys generated. No single party ever had
+                access to the full secret keys.
               </div>
 
               {isRelayMode && relayFingerprint && (
@@ -1848,14 +2217,24 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
                 </div>
               )}
 
-              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Combined ML-DSA Public Key</h3>
+              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>ML-DSA Public Key</h3>
               <div className="pubkey-display">{toHex(state.publicKey)}</div>
               <button
                 className="btn btn-secondary btn-full"
                 style={{ marginBottom: 16 }}
                 onClick={() => copyToClipboard(toHex(state.publicKey!), 'pubkey')}
               >
-                {copied === 'pubkey' ? 'Copied!' : 'Copy Public Key'}
+                {copied === 'pubkey' ? 'Copied!' : 'Copy ML-DSA Public Key'}
+              </button>
+
+              <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>FROST Aggregate Public Key</h3>
+              <div className="pubkey-display">{toHex(state.frostPublicKeyPackage.verifyingKey)}</div>
+              <button
+                className="btn btn-secondary btn-full"
+                style={{ marginBottom: 16 }}
+                onClick={() => copyToClipboard(toHex(state.frostPublicKeyPackage!.verifyingKey), 'frost-pubkey')}
+              >
+                {copied === 'frost-pubkey' ? 'Copied!' : 'Copy FROST Public Key'}
               </button>
 
               <button
