@@ -138,6 +138,8 @@ export const saveDKG = (data: {
   level: number;
   combinedPubKey: string;
   shareData: string;
+  frostAggregateKey?: string;
+  frostUntweakedAggregateKey?: string;
 }) =>
   json<{ ok: true }>('/dkg/save', {
     method: 'POST',
@@ -174,6 +176,38 @@ export const broadcastTx = (data: {
   abi?: unknown[];
   signature: string;
   messageHash: string;
+}) =>
+  json<{ success: boolean; transactionId?: string; estimatedFees?: string; error?: string }>('/tx/broadcast', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
+// ── FROST Signing ──
+
+export interface SighashInfo {
+  index: number;
+  hash: string;
+  type: 'script-path' | 'key-path';
+}
+
+export const getSighash = (data: {
+  contract: string;
+  method: string;
+  params: unknown[];
+  paramTypes?: Array<'address' | 'u256' | 'bytes'>;
+  abi?: unknown;
+  signature: string;
+  messageHash?: string;
+}) =>
+  json<{ sessionId: string; sighashes: SighashInfo[] }>('/tx/sighash', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
+export const broadcastFrost = (data: {
+  sessionId: string;
+  frostSignatures: Array<{ index: number; signature: string }>;
+  messageHash?: string;
 }) =>
   json<{ success: boolean; transactionId?: string; estimatedFees?: string; error?: string }>('/tx/broadcast', {
     method: 'POST',
