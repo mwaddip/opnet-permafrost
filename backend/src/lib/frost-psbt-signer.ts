@@ -74,45 +74,30 @@ export class FrostPsbtSigner {
   }
 
   /**
-   * Create a two-phase signer for the held-Promise pattern.
-   *
-   * Phase 1 (inside /api/tx/sighash): multiSignPsbt extracts all sighashes
-   * using a dummy signer, resolves sighashesPromise, then awaits sigsPromise.
-   *
-   * Phase 2 (inside /api/tx/broadcast): caller resolves sigsPromise with
-   * the FROST signatures. multiSignPsbt resumes and applies them.
+   * Create a capture signer that extracts sighashes from all multiSignPsbt
+   * calls using dummy signatures. The SDK will call multiSignPsbt multiple
+   * times (once per PSBT). Each call accumulates sighashes into a shared
+   * array. The sendTransaction will fail at finalization (dummy sigs) —
+   * the caller catches the error and uses the accumulated sighashes.
    */
-  static createTwoPhase(
+  static createCapture(
     tweakedPublicKey: Uint8Array,
     internalXOnly: Uint8Array,
     untweakedPublicKey: Uint8Array,
   ): {
     signer: FrostPsbtSigner;
-    sighashesPromise: Promise<SighashInfo[]>;
-    resolveSignatures: (sigs: Map<number, Uint8Array>) => void;
-    rejectSignatures: (err: Error) => void;
+    sighashes: SighashInfo[];
   } {
-    let resolveSighashes!: (infos: SighashInfo[]) => void;
-    let resolveSignatures!: (sigs: Map<number, Uint8Array>) => void;
-    let rejectSignatures!: (err: Error) => void;
-
-    const sighashesPromise = new Promise<SighashInfo[]>(r => { resolveSighashes = r; });
-    const sigsPromise = new Promise<Map<number, Uint8Array>>((resolve, reject) => {
-      resolveSignatures = resolve;
-      rejectSignatures = reject;
-    });
+    const sighashes: SighashInfo[] = [];
+    let globalIndex = 0;
 
     const signer = new FrostPsbtSigner(
-      () => { throw new Error('two-phase signer: use multiSignPsbt'); },
+      () => { throw new Error('capture signer: use multiSignPsbt'); },
       tweakedPublicKey,
       internalXOnly,
     );
 
-    // Override multiSignPsbt with two-phase logic
     signer.multiSignPsbt = async (transactions: Psbt[]): Promise<void> => {
-      // Pass 1: extract sighashes with a dummy signer
-      const sighashes: SighashInfo[] = [];
-
       for (const psbt of transactions) {
         for (let i = 0; i < psbt.data.inputs.length; i++) {
           const input = psbt.data.inputs[i];
@@ -137,50 +122,82 @@ export class FrostPsbtSigner {
 
           await psbt.signTaprootInputAsync(i, dummySigner as never);
           sighashes.push({
-            index: i,
+            index: globalIndex++,
             hash: capturedHash!,
             type: isScriptPath ? 'script-path' : 'key-path',
           });
-
-          // Delete dummy sig so pass 2 can sign cleanly
-          const inp = input as Record<string, unknown>;
-          if (isScriptPath) {
-            delete inp.tapScriptSig;
-          } else {
-            delete inp.tapKeySig;
-          }
         }
       }
+    };
 
-      // Notify caller: sighashes ready
-      resolveSighashes(sighashes);
+    return { signer, sighashes };
+  }
 
-      // Pause: wait for real FROST signatures
-      const realSigs = await sigsPromise;
+  /**
+   * Create a replay signer that applies precomputed FROST signatures,
+   * matched by sighash. The SDK calls multiSignPsbt multiple times;
+   * each call extracts the sighash and looks up the matching signature.
+   */
+  static createReplay(
+    tweakedPublicKey: Uint8Array,
+    internalXOnly: Uint8Array,
+    untweakedPublicKey: Uint8Array,
+    sigsByHash: Map<string, Uint8Array>,
+  ): FrostPsbtSigner {
+    const signer = new FrostPsbtSigner(
+      () => { throw new Error('replay signer: use multiSignPsbt'); },
+      tweakedPublicKey,
+      internalXOnly,
+    );
 
-      // Pass 2: apply real signatures
+    signer.multiSignPsbt = async (transactions: Psbt[]): Promise<void> => {
       for (const psbt of transactions) {
         for (let i = 0; i < psbt.data.inputs.length; i++) {
           const input = psbt.data.inputs[i];
           if (!isTaprootInput(input)) continue;
 
-          const sig = realSigs.get(i);
-          if (!sig) continue;
-
           const isScriptPath = !!(input as Record<string, unknown>).tapLeafScript &&
             ((input as Record<string, unknown>).tapLeafScript as unknown[]).length > 0;
+          const isKeyPath = !isScriptPath &&
+            (input as Record<string, unknown>).tapInternalKey &&
+            equals((input as Record<string, unknown>).tapInternalKey as Uint8Array, internalXOnly);
+
+          if (!isScriptPath && !isKeyPath) continue;
+
+          // Extract sighash to look up the matching FROST sig
+          let capturedHash: Uint8Array | undefined;
+          const captureSigner = {
+            publicKey: isScriptPath ? untweakedPublicKey : tweakedPublicKey,
+            signSchnorr(hash: Uint8Array) {
+              capturedHash = new Uint8Array(hash);
+              return new Uint8Array(64); // dummy — will be replaced
+            },
+          };
+
+          await psbt.signTaprootInputAsync(i, captureSigner as never);
+
+          // Delete dummy sig
+          const inp = input as Record<string, unknown>;
+          if (isScriptPath) delete inp.tapScriptSig;
+          else delete inp.tapKeySig;
+
+          // Apply real FROST sig
+          const hashHex = Buffer.from(capturedHash!).toString('hex');
+          const sig = sigsByHash.get(hashHex);
+          if (!sig) {
+            throw new Error(`No FROST signature for sighash ${hashHex.slice(0, 16)}...`);
+          }
 
           const realSigner = {
             publicKey: isScriptPath ? untweakedPublicKey : tweakedPublicKey,
             signSchnorr() { return sig; },
           };
-
           await psbt.signTaprootInputAsync(i, realSigner as never);
         }
       }
     };
 
-    return { signer, sighashesPromise, resolveSignatures, rejectSignatures };
+    return signer;
   }
 
   // -- Signer interface stubs (never called when multiSignPsbt is present) --

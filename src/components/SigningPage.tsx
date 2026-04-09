@@ -38,7 +38,6 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
   type FrostState = 'idle' | 'requesting-sighash' | 'signing' | 'broadcasting';
   const [frostState, setFrostState] = useState<FrostState>('idle');
   const [sighashes, setSighashes] = useState<SighashInfo[] | null>(null);
-  const [frostSessionId, setFrostSessionId] = useState<string | null>(null);
 
   // Role: did this party build the message (initiator) or join with a code (joiner)?
   const [isInitiator, setIsInitiator] = useState(false);
@@ -193,7 +192,6 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
         messageHash: messageMeta.messageHash,
       });
 
-      setFrostSessionId(result.sessionId);
       setSighashes(result.sighashes);
       setFrostState('signing');
 
@@ -214,7 +212,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
 
   const handleFrostSignaturesReady = useCallback(async (sigs: FrostSignatureSet) => {
     // Only leader broadcasts
-    if (!isInitiator || !frostSessionId) {
+    if (!isInitiator || !messageMeta || !signature || !sighashes) {
       // Joiner: just go to result
       setRelayClient(null);
       relayClientRef.current?.close();
@@ -225,10 +223,21 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
 
     setFrostState('broadcasting');
     try {
+      // Map FROST sigs by sighash (not index) for the rebuild approach
+      const frostSigsByHash = sigs.signatures.map((s, i) => ({
+        hash: sighashes[i]!.hash,
+        signature: s.signature,
+      }));
+
       const result = await broadcastFrost({
-        sessionId: frostSessionId,
-        frostSignatures: sigs.signatures,
-        messageHash: messageMeta?.messageHash,
+        contract: messageMeta.contractAddress,
+        method: messageMeta.method,
+        params: Object.values(messageMeta.params),
+        paramTypes: messageMeta.paramTypes,
+        abi: messageMeta.abi,
+        signature,
+        messageHash: messageMeta.messageHash,
+        frostSignatures: frostSigsByHash,
       }) as { transactionId?: string; error?: string };
       setTxResult(result);
     } catch (e) {
@@ -240,7 +249,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
     relayClientRef.current = null;
     setFrostState('idle');
     setPhase('result');
-  }, [isInitiator, frostSessionId, messageMeta]);
+  }, [isInitiator, messageMeta, signature, sighashes]);
 
   // Check if another party already broadcast this tx
   useEffect(() => {
@@ -296,7 +305,6 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
     messageBroadcastRef.current = false;
     setFrostState('idle');
     setSighashes(null);
-    setFrostSessionId(null);
   };
 
   // ── Relay: Create Session ──

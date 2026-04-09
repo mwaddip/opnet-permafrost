@@ -199,15 +199,20 @@ export const getSighash = (data: {
   signature: string;
   messageHash?: string;
 }) =>
-  json<{ sessionId: string; sighashes: SighashInfo[] }>('/tx/sighash', {
+  json<{ sighashes: SighashInfo[] }>('/tx/sighash', {
     method: 'POST',
     body: JSON.stringify(data),
   });
 
 export const broadcastFrost = (data: {
-  sessionId: string;
-  frostSignatures: Array<{ index: number; signature: string }>;
+  contract: string;
+  method: string;
+  params: unknown[];
+  paramTypes?: Array<'address' | 'u256' | 'bytes'>;
+  abi?: unknown;
+  signature: string;
   messageHash?: string;
+  frostSignatures: Array<{ hash: string; signature: string }>;
 }) =>
   json<{ success: boolean; transactionId?: string; estimatedFees?: string; error?: string }>('/tx/broadcast', {
     method: 'POST',
