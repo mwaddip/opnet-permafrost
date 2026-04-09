@@ -1,13 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { MessageBuilder, type MessageMeta } from './MessageBuilder';
 import { ShareImport, ThresholdSign } from './ThresholdSign';
+import { FrostSign } from './FrostSign';
 import { ManifestView } from './ManifestView';
 import { RelayClient } from '../lib/relay';
-import { getConfig, getWalletBalance, broadcastTx, getBroadcastStatus, getSessionRole, hasAdminToken, getActiveSessions, RELAY_URL } from '../lib/api';
+import { getConfig, getWalletBalance, broadcastTx, getSighash, broadcastFrost, getBroadcastStatus, getSessionRole, hasAdminToken, getActiveSessions, RELAY_URL } from '../lib/api';
 import { toHex } from '../lib/threshold';
 import type { VaultConfig } from '../lib/vault-types';
 import type { ManifestConfig } from '../lib/manifest-types';
 import type { DecryptedShare } from '../lib/share-crypto';
+import type { SighashInfo, FrostSignatureSet } from '../lib/frost-sign';
 import type { SendPrefill } from '../App';
 import { OtziWordmark, ThemeToggle } from '../App';
 const TXMSG_PREFIX = 'TXMSG:';
@@ -31,6 +33,12 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
   const [signature, setSignature] = useState<string | null>(null);
   const [txResult, setTxResult] = useState<{ transactionId?: string; error?: string; alreadyBroadcast?: boolean } | null>(null);
   const [broadcasting, setBroadcasting] = useState(false);
+
+  // FROST signing sub-state
+  type FrostState = 'idle' | 'requesting-sighash' | 'signing' | 'broadcasting';
+  const [frostState, setFrostState] = useState<FrostState>('idle');
+  const [sighashes, setSighashes] = useState<SighashInfo[] | null>(null);
+  const [frostSessionId, setFrostSessionId] = useState<string | null>(null);
 
   // Role: did this party build the message (initiator) or join with a code (joiner)?
   const [isInitiator, setIsInitiator] = useState(false);
@@ -125,6 +133,24 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
     return () => { relayClient.off('message', handler); };
   }, [isInitiator, relayClient]);
 
+  // Joiner: listen for FROST sighashes from leader
+  useEffect(() => {
+    if (isInitiator || !relayClient || !share?.frostKeyPackage) return;
+
+    const handler = (_from: number, payload: Uint8Array) => {
+      const text = new TextDecoder().decode(payload);
+      if (!text.startsWith('FROST-SIGHASHES:')) return;
+      try {
+        const hashes = JSON.parse(atob(text.slice('FROST-SIGHASHES:'.length))) as SighashInfo[];
+        setSighashes(hashes);
+        setFrostState('signing');
+      } catch { /* ignore parse errors */ }
+    };
+
+    relayClient.on('message', handler);
+    return () => { relayClient.off('message', handler); };
+  }, [isInitiator, relayClient, share]);
+
   const handleMessageBuilt = useCallback((msg: Uint8Array, meta: MessageMeta) => {
     setMessage(msg);
     setMessageMeta(meta);
@@ -139,13 +165,82 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
     setPhase('sign');
   }, [pendingJoinCode]);
 
-  const handleSignatureReady = useCallback((sig: Uint8Array) => {
-    setSignature(toHex(sig));
+  const handleSignatureReady = useCallback(async (sig: Uint8Array) => {
+    const sigHex = toHex(sig);
+    setSignature(sigHex);
+
+    // V2 fallback: no FROST key → go straight to result (existing behavior)
+    if (!share?.frostKeyPackage) {
+      setRelayClient(null);
+      relayClientRef.current?.close();
+      relayClientRef.current = null;
+      setPhase('result');
+      return;
+    }
+
+    // V3: request sighashes for FROST ceremony
+    if (!isInitiator || !messageMeta) return;
+    setFrostState('requesting-sighash');
+
+    try {
+      const result = await getSighash({
+        contract: messageMeta.contractAddress,
+        method: messageMeta.method,
+        params: Object.values(messageMeta.params),
+        paramTypes: messageMeta.paramTypes,
+        abi: messageMeta.abi,
+        signature: sigHex,
+        messageHash: messageMeta.messageHash,
+      });
+
+      setFrostSessionId(result.sessionId);
+      setSighashes(result.sighashes);
+      setFrostState('signing');
+
+      // Broadcast sighashes to joiners so they can start FROST too
+      if (relayClient) {
+        const payload = 'FROST-SIGHASHES:' + btoa(JSON.stringify(result.sighashes));
+        void relayClient.broadcast(new TextEncoder().encode(payload));
+      }
+    } catch (e) {
+      setFrostState('idle');
+      setTxResult({ error: `Sighash request failed: ${(e as Error).message}` });
+      setRelayClient(null);
+      relayClientRef.current?.close();
+      relayClientRef.current = null;
+      setPhase('result');
+    }
+  }, [share, isInitiator, messageMeta, relayClient]);
+
+  const handleFrostSignaturesReady = useCallback(async (sigs: FrostSignatureSet) => {
+    // Only leader broadcasts
+    if (!isInitiator || !frostSessionId) {
+      // Joiner: just go to result
+      setRelayClient(null);
+      relayClientRef.current?.close();
+      relayClientRef.current = null;
+      setPhase('result');
+      return;
+    }
+
+    setFrostState('broadcasting');
+    try {
+      const result = await broadcastFrost({
+        sessionId: frostSessionId,
+        frostSignatures: sigs.signatures,
+        messageHash: messageMeta?.messageHash,
+      }) as { transactionId?: string; error?: string };
+      setTxResult(result);
+    } catch (e) {
+      setTxResult({ error: (e as Error).message });
+    }
+
     setRelayClient(null);
     relayClientRef.current?.close();
     relayClientRef.current = null;
+    setFrostState('idle');
     setPhase('result');
-  }, []);
+  }, [isInitiator, frostSessionId, messageMeta]);
 
   // Check if another party already broadcast this tx
   useEffect(() => {
@@ -199,6 +294,9 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
     setIsInitiator(false);
     autoJoinRef.current = false;
     messageBroadcastRef.current = false;
+    setFrostState('idle');
+    setSighashes(null);
+    setFrostSessionId(null);
   };
 
   // ── Relay: Create Session ──
@@ -513,7 +611,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
           )}
 
           {/* Step 3: Threshold signing (after relay is ready AND message is available) */}
-          {share && relayReady && relayClient && message && messageMeta && (
+          {share && relayReady && relayClient && message && messageMeta && frostState === 'idle' && (
             <ThresholdSign
               stepTitle={`Sign: ${messageMeta.method}`}
               targetContract={messageMeta.contractAddress}
@@ -527,6 +625,41 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
               relayPartyId={relayClient.partyId}
               isLeader={isInitiator}
             />
+          )}
+
+          {/* FROST signing (after ML-DSA complete, sighashes received) */}
+          {share?.frostKeyPackage && frostState === 'signing' && sighashes && relayClient && (
+            <FrostSign
+              sighashes={sighashes}
+              frostKeyPackage={share.frostKeyPackage}
+              frostPublicKey={share.frostPublicKey!}
+              threshold={share.threshold}
+              partyId={share.partyId}
+              onSignaturesReady={handleFrostSignaturesReady}
+              onCancel={handleReset}
+              relayClient={relayClient}
+              relayReady={relayReady}
+              isLeader={isInitiator}
+            />
+          )}
+
+          {/* FROST state indicators */}
+          {frostState === 'requesting-sighash' && (
+            <div className="card" style={{ textAlign: 'center', padding: 24 }}>
+              <span className="spinner" />
+              <div style={{ marginTop: 12, fontSize: 14, fontWeight: 600 }}>
+                Building transaction and extracting sighashes...
+              </div>
+            </div>
+          )}
+
+          {frostState === 'broadcasting' && (
+            <div className="card" style={{ textAlign: 'center', padding: 24 }}>
+              <span className="spinner" />
+              <div style={{ marginTop: 12, fontSize: 14, fontWeight: 600 }}>
+                Broadcasting transaction...
+              </div>
+            </div>
           )}
         </>
       )}
@@ -551,8 +684,17 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
             Copy Signature
           </button>
 
-          {/* Broadcast button — only for initiator with wallet configured */}
-          {config.wallet && !txResult && isInitiator && (
+          {share?.frostKeyPackage && (
+            <>
+              <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>FROST BTC Signatures</h3>
+              <div className="step-status confirmed" style={{ marginBottom: 16 }}>
+                Threshold BTC signing complete
+              </div>
+            </>
+          )}
+
+          {/* Broadcast button — only for initiator with wallet, V2 path only (V3 already broadcast) */}
+          {config.wallet && !txResult && isInitiator && !share?.frostKeyPackage && (
             <button className="btn btn-primary btn-full" onClick={handleBroadcast} disabled={broadcasting}>
               {broadcasting ? <span className="spinner" /> : 'Broadcast Transaction'}
             </button>
