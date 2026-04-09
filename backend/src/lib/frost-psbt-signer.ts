@@ -151,6 +151,7 @@ export class FrostPsbtSigner {
     );
 
     signer.multiSignPsbt = async (transactions: Psbt[]): Promise<void> => {
+      console.log(`[frost-replay] multiSignPsbt called with ${transactions.length} PSBTs, ${sigsByHash.size} sigs available`);
       for (const psbt of transactions) {
         for (let i = 0; i < psbt.data.inputs.length; i++) {
           const input = psbt.data.inputs[i];
@@ -162,7 +163,7 @@ export class FrostPsbtSigner {
             (input as Record<string, unknown>).tapInternalKey &&
             equals((input as Record<string, unknown>).tapInternalKey as Uint8Array, internalXOnly);
 
-          if (!isScriptPath && !isKeyPath) continue;
+          if (!isScriptPath && !isKeyPath) { console.log(`[frost-replay] input ${i}: skipped (not taproot key/script path)`); continue; }
 
           // Extract sighash to look up the matching FROST sig
           let capturedHash: Uint8Array | undefined;
@@ -185,16 +186,28 @@ export class FrostPsbtSigner {
           const hashHex = Buffer.from(capturedHash!).toString('hex');
           const sig = sigsByHash.get(hashHex);
           if (!sig) {
+            console.error(`[frost-replay] NO SIG for ${isScriptPath ? 'script' : 'key'}-path input ${i}, hash=${hashHex.slice(0, 16)}...`);
+            console.error(`[frost-replay] Available hashes: ${[...sigsByHash.keys()].map(h => h.slice(0, 16)).join(', ')}`);
             throw new Error(`No FROST signature for sighash ${hashHex.slice(0, 16)}...`);
           }
+
+          console.log(`[frost-replay] input ${i} (${isScriptPath ? 'script' : 'key'}-path): hash=${hashHex.slice(0, 16)}... → sig=${Buffer.from(sig).toString('hex').slice(0, 16)}...`);
 
           const realSigner = {
             publicKey: isScriptPath ? untweakedPublicKey : tweakedPublicKey,
             signSchnorr() { return sig; },
           };
-          await psbt.signTaprootInputAsync(i, realSigner as never);
+
+          try {
+            await psbt.signTaprootInputAsync(i, realSigner as never);
+            console.log(`[frost-replay] input ${i} signed OK`);
+          } catch (e) {
+            console.error(`[frost-replay] input ${i} signTaprootInputAsync FAILED:`, e);
+            throw e;
+          }
         }
       }
+      console.log('[frost-replay] multiSignPsbt complete');
     };
 
     return signer;

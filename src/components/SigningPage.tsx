@@ -38,6 +38,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
   type FrostState = 'idle' | 'requesting-sighash' | 'signing' | 'broadcasting';
   const [frostState, setFrostState] = useState<FrostState>('idle');
   const [sighashes, setSighashes] = useState<SighashInfo[] | null>(null);
+  const [frostChallenge, setFrostChallenge] = useState<string | null>(null);
 
   // Role: did this party build the message (initiator) or join with a code (joiner)?
   const [isInitiator, setIsInitiator] = useState(false);
@@ -193,6 +194,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
       });
 
       setSighashes(result.sighashes);
+      setFrostChallenge(result.challenge);
       setFrostState('signing');
 
       // Broadcast sighashes to joiners so they can start FROST too
@@ -237,6 +239,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
         abi: messageMeta.abi,
         signature,
         messageHash: messageMeta.messageHash,
+        challenge: frostChallenge ?? undefined,
         frostSignatures: frostSigsByHash,
       }) as { transactionId?: string; error?: string };
       setTxResult(result);
@@ -249,7 +252,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
     relayClientRef.current = null;
     setFrostState('idle');
     setPhase('result');
-  }, [isInitiator, messageMeta, signature, sighashes]);
+  }, [isInitiator, messageMeta, signature, sighashes, frostChallenge]);
 
   // Check if another party already broadcast this tx
   useEffect(() => {
@@ -305,6 +308,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
     messageBroadcastRef.current = false;
     setFrostState('idle');
     setSighashes(null);
+    setFrostChallenge(null);
   };
 
   // ── Relay: Create Session ──

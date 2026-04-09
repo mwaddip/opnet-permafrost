@@ -347,7 +347,7 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
         type: h.type,
       }));
 
-      res.json({ sighashes: sighashesHex });
+      res.json({ sighashes: sighashesHex, challenge: JSON.stringify(challenge) });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
@@ -361,10 +361,10 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
     };
 
     if (frostSignatures) {
-      const { contract: contractAddr, method, params: rawParams, paramTypes, abi, signature, messageHash } = req.body as {
+      const { contract: contractAddr, method, params: rawParams, paramTypes, abi, signature, messageHash, challenge: challengeJson } = req.body as {
         contract: string; method: string; params: unknown[];
         paramTypes?: Array<'address' | 'u256' | 'bytes'>; abi?: unknown;
-        signature: string; messageHash?: string;
+        signature: string; messageHash?: string; challenge?: string;
       };
 
       if (!signature || !/^[0-9a-fA-F]+$/.test(signature)) {
@@ -434,7 +434,8 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
           return;
         }
 
-        const challenge = await provider.getChallenge();
+        // Reuse the challenge from the sighash endpoint to ensure identical tx build
+        const challenge = challengeJson ? JSON.parse(challengeJson) : await provider.getChallenge();
         const sigBytes = Buffer.from(signature, 'hex');
         const pubKeyBytes = Buffer.from(config.permafrost.combinedPubKey, 'hex');
         const thresholdSigner = new ThresholdMLDSASigner(sigBytes, pubKeyBytes);

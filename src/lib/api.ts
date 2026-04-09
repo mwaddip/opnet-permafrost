@@ -199,7 +199,7 @@ export const getSighash = (data: {
   signature: string;
   messageHash?: string;
 }) =>
-  json<{ sighashes: SighashInfo[] }>('/tx/sighash', {
+  json<{ sighashes: SighashInfo[]; challenge: string }>('/tx/sighash', {
     method: 'POST',
     body: JSON.stringify(data),
   });
@@ -212,6 +212,7 @@ export const broadcastFrost = (data: {
   abi?: unknown;
   signature: string;
   messageHash?: string;
+  challenge?: string;
   frostSignatures: Array<{ hash: string; signature: string }>;
 }) =>
   json<{ success: boolean; transactionId?: string; estimatedFees?: string; error?: string }>('/tx/broadcast', {
