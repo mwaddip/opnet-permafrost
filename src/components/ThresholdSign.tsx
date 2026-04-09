@@ -731,9 +731,13 @@ export function ThresholdSign({
         return;
       }
 
-      // Handle signing blobs
+      // Handle signing blobs — only accept blobs for the CURRENT round.
+      // Without this, stale blobs from a previous attempt (same msgPrefix,
+      // same partyId, map cleared on restart) sneak into the new attempt
+      // and cause "Commitment hash mismatch" in round3().
       if (!sessionRef.current) return;
-      const result = addBlob(sessionRef.current, text);
+      const myRound = phaseToRound(phase);
+      const result = addBlob(sessionRef.current, text, myRound || undefined);
       if (result.ok) {
         setSession({ ...sessionRef.current });
       }

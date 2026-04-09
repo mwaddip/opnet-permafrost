@@ -54,20 +54,28 @@ import {
   dkgRound1 as frostDkgRound1,
   dkgRound2 as frostDkgRound2,
   dkgFinalize as frostDkgFinalize,
+  signRound1 as frostSignR1,
+  signRound2 as frostSignR2,
+  signAggregate as frostSignAgg,
   type Round1SecretPackage as FrostR1Secret,
   type Round2SecretPackage as FrostR2Secret,
   type KeyPackage as FrostKeyPackage,
   type PublicKeyPackage as FrostPublicKeyPackage,
+  type SigningCommitment,
+  type SigningNonces,
+  type SignatureShare,
 } from 'frots';
 import { RelayClient } from '../lib/relay';
 import { sessionFingerprint } from '../lib/relay-crypto';
 import { RELAY_URL } from '../lib/api';
 import type { ThresholdKeyShare } from '@btc-vision/post-quantum/threshold-ml-dsa.js';
 import { OtziWordmark } from '../App';
+import { computeKeyLinkHash } from '../lib/frost-link';
+import { encodeFrostSignR1, decodeFrostSignR1, encodeFrostSignR2, decodeFrostSignR2 } from '../lib/frost-sign';
 
 // ── Types ──
 
-type Step = 'join' | 'commit' | 'reveal' | 'masks' | 'aggregate' | 'frost-commit' | 'frost-shares' | 'complete';
+type Step = 'join' | 'commit' | 'reveal' | 'masks' | 'aggregate' | 'frost-commit' | 'frost-shares' | 'frost-link' | 'complete';
 type Role = 'initiator' | 'joiner';
 type TransportMode = 'choose' | 'offline' | 'relay-create' | 'relay-join';
 
@@ -111,6 +119,9 @@ interface DKGState {
   myFrostR2Blobs: Map<number, string>;
   collectedFrostR2: FrostRound2Package[];
 
+  // FROST key-link signing
+  frostLinkSig: string | null;  // 64-byte hex FROST Schnorr sig over key-link message
+
   // Result
   publicKey: Uint8Array | null;
   share: ThresholdKeyShare | null;
@@ -145,6 +156,7 @@ type Action =
   | { type: 'ADD_FROST_R2'; pkg: FrostRound2Package }
   | { type: 'SET_RESULT'; publicKey: Uint8Array; share: ThresholdKeyShare }
   | { type: 'SET_FROST_RESULT'; keyPackage: FrostKeyPackage; publicKeyPackage: FrostPublicKeyPackage }
+  | { type: 'SET_FROST_LINK_SIG'; sig: string }
   | { type: 'SET_ERROR'; error: string | null };
 
 const initialState: DKGState = {
@@ -174,6 +186,7 @@ const initialState: DKGState = {
   frostR2Secret: null,
   myFrostR2Blobs: new Map(),
   collectedFrostR2: [],
+  frostLinkSig: null,
   publicKey: null,
   share: null,
   frostKeyPackage: null,
@@ -248,6 +261,8 @@ function reducer(state: DKGState, action: Action): DKGState {
       return { ...state, publicKey: action.publicKey, share: action.share };
     case 'SET_FROST_RESULT':
       return { ...state, frostKeyPackage: action.keyPackage, frostPublicKeyPackage: action.publicKeyPackage };
+    case 'SET_FROST_LINK_SIG':
+      return { ...state, frostLinkSig: action.sig };
     case 'SET_ERROR':
       return { ...state, error: action.error };
   }
@@ -255,8 +270,8 @@ function reducer(state: DKGState, action: Action): DKGState {
 
 // ── Step labels and indices ──
 
-const STEPS: Step[] = ['join', 'commit', 'reveal', 'masks', 'aggregate', 'frost-commit', 'frost-shares', 'complete'];
-const STEP_LABELS = ['Join', 'Commit', 'Reveal', 'Masks', 'Aggregate', 'FROST R1', 'FROST R2', 'Complete'];
+const STEPS: Step[] = ['join', 'commit', 'reveal', 'masks', 'aggregate', 'frost-commit', 'frost-shares', 'frost-link', 'complete'];
+const STEP_LABELS = ['Join', 'Commit', 'Reveal', 'Masks', 'Aggregate', 'FROST R1', 'FROST R2', 'Key Link', 'Complete'];
 
 // ── Extracted sub-components (defined outside DKGWizard to avoid re-creation) ──
 
@@ -394,6 +409,16 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
   const [phase4Sent, setPhase4Sent] = useState(false);
   const [frostR1Sent, setFrostR1Sent] = useState(false);
   const [frostR2Sent, setFrostR2Sent] = useState(false);
+
+  // FROST key-link signing state (refs for intermediate, state for counts to trigger re-renders)
+  const flinkNoncesRef = useRef<SigningNonces | null>(null);
+  const flinkCommitmentsRef = useRef<Map<number, SigningCommitment>>(new Map());
+  const flinkSharesRef = useRef<Map<number, SignatureShare>>(new Map());
+  const [flinkR1Count, setFlinkR1Count] = useState(0);
+  const [flinkR2Count, setFlinkR2Count] = useState(0);
+  const flinkInitRef = useRef(false);
+  const flinkR2DoneRef = useRef(false);
+  const flinkHashRef = useRef<Uint8Array | null>(null);
 
   // Barrier synchronisation: parties don't advance until ALL parties confirm
   // they have sent their blob AND collected all expected blobs for the phase.
@@ -597,6 +622,22 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
         dispatch({ type: 'ADD_FROST_R2', pkg });
         return true;
       }
+      case 'frost-sign-r1': {
+        const decoded = decodeFrostSignR1(text.trim());
+        if (!decoded || decoded.partyId === state.myPartyId) return false;
+        if (flinkCommitmentsRef.current.has(decoded.partyId)) return false;
+        flinkCommitmentsRef.current.set(decoded.partyId, decoded.commitments[0]!);
+        setFlinkR1Count(flinkCommitmentsRef.current.size);
+        return true;
+      }
+      case 'frost-sign-r2': {
+        const decoded = decodeFrostSignR2(text.trim());
+        if (!decoded || decoded.partyId === state.myPartyId) return false;
+        if (flinkSharesRef.current.has(decoded.partyId)) return false;
+        flinkSharesRef.current.set(decoded.partyId, decoded.shares[0]!);
+        setFlinkR2Count(flinkSharesRef.current.size);
+        return true;
+      }
       default:
         return false;
     }
@@ -629,6 +670,13 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
           next[phase] = s;
           return next;
         });
+        return;
+      }
+      // Intercept FLINK-COMPLETE from leader
+      if (text.startsWith('FLINK-COMPLETE:')) {
+        const sigHex = text.slice('FLINK-COMPLETE:'.length);
+        dispatch({ type: 'SET_FROST_LINK_SIG', sig: sigHex });
+        dispatch({ type: 'SET_STEP', step: 'complete' });
         return;
       }
       handleRelayBlobRef.current(text);
@@ -1212,9 +1260,113 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
   useEffect(() => {
     if (!isRelayMode || state.step !== 'frost-shares') return;
     if ((barriers['frost-shares']?.size ?? 0) >= state.parties) {
-      dispatch({ type: 'SET_STEP', step: 'complete' });
+      dispatch({ type: 'SET_STEP', step: 'frost-link' });
     }
   }, [isRelayMode, state.step, barriers, state.parties]);
+
+  // ════════════════════════════════════════════════════════════════════
+  // STEP: FROST-LINK (FROST-sign the OPNet key-link message)
+  // ════════════════════════════════════════════════════════════════════
+
+  // Auto-start: compute key-link hash, run FROST signRound1, broadcast commitment
+  useEffect(() => {
+    if (state.step !== 'frost-link' || flinkInitRef.current) return;
+    if (!state.frostKeyPackage || !state.frostPublicKeyPackage || !state.publicKey) return;
+    if (!state.sessionId) return;
+    flinkInitRef.current = true;
+
+    const aggKey = state.frostPublicKeyPackage.verifyingKey;
+    const untweakedKey = state.frostPublicKeyPackage.untweakedVerifyingKey;
+
+    // Fetch network from config, compute hash, start round 1
+    void import('../lib/api').then(({ getConfig }) => getConfig()).then(async cfg => {
+      const hash = await computeKeyLinkHash(state.publicKey!, aggKey, untweakedKey, cfg.network);
+      flinkHashRef.current = hash;
+
+      const rng = { fillBytes(dest: Uint8Array) { crypto.getRandomValues(dest); } };
+      const { nonces, commitments } = frostSignR1(state.frostKeyPackage!, rng);
+      flinkNoncesRef.current = nonces;
+
+      // Add own commitment
+      flinkCommitmentsRef.current.set(state.myPartyId, commitments);
+      setFlinkR1Count(flinkCommitmentsRef.current.size);
+
+      // Broadcast via relay
+      if (relayClient) {
+        const blob = encodeFrostSignR1(state.myPartyId, [commitments], state.sessionId!);
+        void relaySendBlob(blob);
+      }
+    }).catch(e => {
+      dispatch({ type: 'SET_ERROR', error: `Key link failed: ${e instanceof Error ? e.message : String(e)}` });
+    });
+  }, [state.step, state.frostKeyPackage, state.frostPublicKeyPackage, state.publicKey, state.sessionId, state.myPartyId, relayClient, relaySendBlob]);
+
+  // When all R1 commitments collected: compute R2 (signRound2 with tweaked=true)
+  useEffect(() => {
+    if (state.step !== 'frost-link' || flinkR2DoneRef.current) return;
+    if (flinkR1Count < state.parties || !flinkHashRef.current || !flinkNoncesRef.current || !state.frostKeyPackage || !state.sessionId) return;
+    flinkR2DoneRef.current = true;
+
+    try {
+      const allCommitments: SigningCommitment[] = [];
+      for (const [, c] of flinkCommitmentsRef.current) allCommitments.push(c);
+
+      const share = frostSignR2(
+        state.frostKeyPackage,
+        flinkNoncesRef.current,
+        flinkHashRef.current,
+        allCommitments,
+        { tweaked: true },
+      );
+
+      // Add own share
+      flinkSharesRef.current.set(state.myPartyId, share);
+      setFlinkR2Count(flinkSharesRef.current.size);
+
+      // Broadcast
+      if (relayClient) {
+        const blob = encodeFrostSignR2(state.myPartyId, [share], state.sessionId);
+        void relaySendBlob(blob);
+      }
+    } catch (e) {
+      dispatch({ type: 'SET_ERROR', error: `Key link R2 failed: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }, [state.step, flinkR1Count, state.parties, state.frostKeyPackage, state.sessionId, relayClient, relaySendBlob]);
+
+  // When all R2 shares collected: aggregate and advance to complete
+  useEffect(() => {
+    if (state.step !== 'frost-link') return;
+    if (flinkR2Count < state.parties || !flinkHashRef.current || !state.frostKeyPackage) return;
+
+    try {
+      const allCommitments: SigningCommitment[] = [];
+      for (const [, c] of flinkCommitmentsRef.current) allCommitments.push(c);
+
+      const allShares: SignatureShare[] = [];
+      for (const [, s] of flinkSharesRef.current) allShares.push(s);
+
+      const pubKeyPkg: FrostPublicKeyPackage = {
+        verifyingKey: state.frostKeyPackage.verifyingKey,
+        untweakedVerifyingKey: state.frostKeyPackage.untweakedVerifyingKey,
+        verifyingShares: new Map(),
+        untweakedVerifyingShares: new Map(),
+        minSigners: state.threshold,
+      };
+
+      const sig = frostSignAgg(allShares, flinkHashRef.current, allCommitments, pubKeyPkg, { tweaked: true });
+      const sigHex = toHex(sig);
+      dispatch({ type: 'SET_FROST_LINK_SIG', sig: sigHex });
+
+      // Broadcast result to other parties
+      if (relayClient) {
+        void relaySendBlob(`FLINK-COMPLETE:${sigHex}`);
+      }
+
+      dispatch({ type: 'SET_STEP', step: 'complete' });
+    } catch (e) {
+      dispatch({ type: 'SET_ERROR', error: `Key link aggregate failed: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }, [state.step, flinkR2Count, state.parties, state.frostKeyPackage, state.threshold, relayClient, relaySendBlob]);
 
   // ════════════════════════════════════════════════════════════════════
   // STEP: COMPLETE (Finalize)
@@ -1286,6 +1438,7 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
           shareData: shareFile.encrypted,
           frostAggregateKey: toHex(state.frostPublicKeyPackage!.verifyingKey),
           frostUntweakedAggregateKey: toHex(state.frostPublicKeyPackage!.untweakedVerifyingKey),
+          frostLegacySig: state.frostLinkSig ?? undefined,
         });
         onComplete?.();
       } catch (e) {
@@ -2182,15 +2335,31 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
               <button
                 className="btn btn-primary btn-full"
                 style={{ marginTop: 16 }}
-                onClick={() => dispatch({ type: 'SET_STEP', step: 'complete' })}
+                onClick={() => dispatch({ type: 'SET_STEP', step: 'frost-link' })}
                 disabled={!frostR2Ready}
               >
                 {frostR2Ready
-                  ? 'Finalize Ceremony'
+                  ? 'Key Link'
                   : `Waiting for ${state.parties - 1 - state.collectedFrostR2.length} more share(s)`}
               </button>
             </>
           )}
+        </div>
+      )}
+
+      {/* ═══════ STEP: FROST-LINK (Key Link Signing) ═══════ */}
+      {state.step === 'frost-link' && (
+        <div className="card">
+          <h2>Key Link</h2>
+          <div className="threshold-hint" style={{ textAlign: 'center', padding: '16px 0' }}>
+            Signing OPNet key link...
+            {flinkR1Count < state.parties
+              ? ` (commitments: ${flinkR1Count}/${state.parties})`
+              : flinkR2Count < state.parties
+              ? ` (shares: ${flinkR2Count}/${state.parties})`
+              : ' aggregating...'}
+          </div>
+          {state.error && <div className="step-status error">{state.error}</div>}
         </div>
       )}
 

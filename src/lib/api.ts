@@ -140,6 +140,7 @@ export const saveDKG = (data: {
   shareData: string;
   frostAggregateKey?: string;
   frostUntweakedAggregateKey?: string;
+  frostLegacySig?: string;
 }) =>
   json<{ ok: true }>('/dkg/save', {
     method: 'POST',

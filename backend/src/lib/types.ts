@@ -24,6 +24,7 @@ export interface PermafrostConfig {
   frostAggregateKey?: string;
   frostUntweakedAggregateKey?: string;
   frostP2tr?: string;
+  frostLegacySig?: string;  // 64-byte hex, FROST Schnorr sig over key-link message
 }
 
 export interface ContractConfig {

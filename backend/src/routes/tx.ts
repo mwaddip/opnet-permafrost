@@ -1,12 +1,13 @@
 import { Router, type Request, type Response, type RequestHandler } from 'express';
 import { createHash, randomBytes } from 'node:crypto';
 import { Address, BinaryWriter } from '@btc-vision/transaction';
-import { toXOnly, tapTweakHash } from '@btc-vision/bitcoin';
+import { Transaction, toXOnly, tapTweakHash } from '@btc-vision/bitcoin';
 import { getContract, OP_20_ABI } from 'opnet';
 import { ConfigStore } from '../lib/config-store.js';
 import { getProvider, getNetwork, generateWallet } from '../lib/opnet-client.js';
 import { ThresholdMLDSASigner } from '../lib/threshold-signer.js';
 import { FrostPsbtSigner } from '../lib/frost-psbt-signer.js';
+import { computeKeyLinkHash, withFrostLegacySig } from '../lib/frost-link.js';
 
 // Normalize manifest ABI entries to match opnet SDK format
 const ABI_TYPE_MAP: Record<string, string> = {
@@ -57,11 +58,17 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
   // Broadcast lock: messageHash → result (prevents double-broadcast)
   const broadcastResults = new Map<string, { transactionId?: string; estimatedFees?: string; error?: string; _ts?: number }>();
 
-  // Cached challenges for FROST two-build flow (5 min TTL)
-  const challengeCache = new Map<string, { challenge: unknown; ts: number }>();
+  // Cached capture data for FROST template-tx flow (5 min TTL)
+  // Stores finalized template transactions (with dummy sigs) + sighash→input mapping
+  interface CachedCapture {
+    templateTxs: string[];  // raw tx hex [funding, interaction]
+    sighashMap: Map<string, { txIndex: number; inputIndex: number; type: 'script-path' | 'key-path' }>;
+    ts: number;
+  }
+  const captureCache = new Map<string, CachedCapture>();
   setInterval(() => {
     const cutoff = Date.now() - 5 * 60 * 1000;
-    for (const [k, v] of challengeCache) { if (v.ts < cutoff) challengeCache.delete(k); }
+    for (const [k, v] of captureCache) { if (v.ts < cutoff) captureCache.delete(k); }
   }, 60 * 1000);
 
   // Clean up old broadcast results every 10 minutes (keep for 1 hour)
@@ -240,7 +247,7 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
     }
   });
 
-  /** POST /api/tx/sighash — build OPNet tx with dummy sigs, extract per-input sighashes for FROST ceremony */
+  /** POST /api/tx/sighash — build OPNet tx with dummy sigs, capture template txs + sighashes for FROST ceremony */
   r.post('/sighash', requireUser, async (req: Request, res: Response) => {
     const { contract: contractAddr, method, params: rawParams, paramTypes, abi, signature } = req.body as {
       contract: string;
@@ -300,7 +307,6 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
         return;
       }
 
-      const challenge = await provider.getChallenge();
       const sigBytes = Buffer.from(signature, 'hex');
       const pubKeyBytes = Buffer.from(config.permafrost.combinedPubKey, 'hex');
       const thresholdSigner = new ThresholdMLDSASigner(sigBytes, pubKeyBytes);
@@ -309,9 +315,8 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
       const untweakedPubKey = Buffer.from(config.permafrost.frostUntweakedAggregateKey, 'hex');
       const internalXOnly = toXOnly(untweakedPubKey as never);
 
-      // Capture signer: extracts sighashes via dummy sigs. sendTransaction
-      // will fail at finalization — we catch it and return the sighashes.
-      const { signer: captureSigner, sighashes: capturedSighashes } =
+      // Capture signer: extracts sighashes via dummy sigs, tracks per-call data
+      const { signer: captureSigner, calls: capturedCalls } =
         FrostPsbtSigner.createCapture(tweakedPubKey, internalXOnly, untweakedPubKey);
 
       const hybridSigner = wallet.keypair as typeof wallet.keypair & {
@@ -324,62 +329,103 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
         configurable: true,
       });
 
-      // Build tx with dummy sigs — will fail at finalization, that's expected
+      // Intercept provider broadcast to capture finalized template txs
+      const capturedTemplateTxs: string[] = [];
+      const origSendRawPkg = (provider as unknown as Record<string, unknown>).sendRawTransactionPackage as (...args: unknown[]) => Promise<unknown>;
+      const origSendRaw = (provider as unknown as Record<string, unknown>).sendRawTransaction as (...args: unknown[]) => Promise<unknown>;
+      (provider as unknown as Record<string, unknown>).sendRawTransactionPackage = async (txs: string[]) => {
+        capturedTemplateTxs.push(...txs);
+        throw new Error('__capture_only__');
+      };
+      (provider as unknown as Record<string, unknown>).sendRawTransaction = async (tx: string) => {
+        capturedTemplateTxs.push(tx);
+        throw new Error('__capture_only__');
+      };
+
+      // Build tx with dummy sigs — SDK finalizes (dummy sigs pass finalization),
+      // then tries to broadcast → our override captures the hex and throws.
+      // If FROST legacy sig exists, inject it so the SDK produces valid key-link signatures.
+      const frostLegacySigHex = config.permafrost?.frostLegacySig;
+      const sendTxParams = {
+        signer: hybridSigner as never,
+        mldsaSigner: thresholdSigner,
+        refundTo: refundAddress,
+        network,
+        feeRate: TX_FEE_RATE,
+        priorityFee: TX_PRIORITY_FEE,
+        maximumAllowedSatToSpend: TX_MAX_SAT_SPEND,
+      };
+
       try {
-        await callResult.sendTransaction({
-          signer: hybridSigner as never,
-          mldsaSigner: thresholdSigner,
-          refundTo: refundAddress,
-          network,
-          feeRate: TX_FEE_RATE,
-          priorityFee: TX_PRIORITY_FEE,
-          maximumAllowedSatToSpend: TX_MAX_SAT_SPEND,
-          challenge,
-        });
+        if (frostLegacySigHex) {
+          const keyLinkHash = computeKeyLinkHash(pubKeyBytes, tweakedPubKey, untweakedPubKey, config.network);
+          const frostLegacySigBytes = Buffer.from(frostLegacySigHex, 'hex');
+          await withFrostLegacySig(
+            keyLinkHash, frostLegacySigBytes, tweakedPubKey,
+            hybridSigner as unknown as { tweak?: (...args: unknown[]) => unknown },
+            () => callResult.sendTransaction(sendTxParams),
+          );
+        } else {
+          await callResult.sendTransaction(sendTxParams);
+        }
       } catch {
-        // Expected: finalization fails with dummy sigs
+        // Expected: our __capture_only__ throw prevents actual broadcast
       }
+
+      // Restore provider methods
+      (provider as unknown as Record<string, unknown>).sendRawTransactionPackage = origSendRawPkg;
+      (provider as unknown as Record<string, unknown>).sendRawTransaction = origSendRaw;
 
       mnemonic.zeroize();
       wallet.zeroize();
 
-      if (capturedSighashes.length === 0) {
-        res.status(500).json({ error: 'No sighashes captured — sendTransaction may have failed before signing' });
+      if (capturedTemplateTxs.length === 0 || capturedCalls.length < capturedTemplateTxs.length) {
+        res.status(500).json({ error: 'Capture failed — no template transactions or insufficient signing rounds' });
         return;
       }
 
-      const sighashesHex = capturedSighashes.map(h => ({
-        index: h.index,
-        hash: Buffer.from(h.hash).toString('hex'),
-        type: h.type,
-      }));
+      // The last N multiSignPsbt calls correspond to the N template txs.
+      // signInteraction order: ...fee-estimation..., final-funding, final-interaction
+      // sendRawTransactionPackage order: [funding, interaction]
+      const numTxs = capturedTemplateTxs.length;
+      const finalCalls = capturedCalls.slice(-numTxs);
 
-      const challengeToken = randomBytes(16).toString('hex');
-      challengeCache.set(challengeToken, { challenge, ts: Date.now() });
-      res.json({ sighashes: sighashesHex, challengeToken });
+      // Build sighash → (txIndex, inputIndex, type) map for the final builds only
+      const sighashMap = new Map<string, { txIndex: number; inputIndex: number; type: 'script-path' | 'key-path' }>();
+      const finalSighashes: Array<{ index: number; hash: string; type: string }> = [];
+      let idx = 0;
+      for (let txIdx = 0; txIdx < finalCalls.length; txIdx++) {
+        for (const sh of finalCalls[txIdx]!.sighashes) {
+          const hashHex = Buffer.from(sh.hash).toString('hex');
+          sighashMap.set(hashHex, { txIndex: txIdx, inputIndex: sh.inputIndex, type: sh.type });
+          finalSighashes.push({ index: idx++, hash: hashHex, type: sh.type });
+        }
+      }
+
+      if (finalSighashes.length === 0) {
+        res.status(500).json({ error: 'No sighashes captured from final transaction builds' });
+        return;
+      }
+
+      const captureToken = randomBytes(16).toString('hex');
+      captureCache.set(captureToken, { templateTxs: capturedTemplateTxs, sighashMap, ts: Date.now() });
+      res.json({ sighashes: finalSighashes, challengeToken: captureToken });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
   });
 
-  /** POST /api/tx/broadcast — build tx with ML-DSA sig and broadcast */
+  /** POST /api/tx/broadcast — broadcast with FROST sigs or legacy single-key */
   r.post('/broadcast', requireUser, async (req: Request, res: Response) => {
-    // FROST path: rebuild transaction with precomputed FROST sigs (matched by hash)
+    // FROST path: replace dummy sigs in cached template txs with real FROST sigs
     const { frostSignatures } = req.body as {
       frostSignatures?: Array<{ hash: string; signature: string }>;
     };
 
     if (frostSignatures) {
-      const { contract: contractAddr, method, params: rawParams, paramTypes, abi, signature, messageHash, challengeToken } = req.body as {
-        contract: string; method: string; params: unknown[];
-        paramTypes?: Array<'address' | 'u256' | 'bytes'>; abi?: unknown;
-        signature: string; messageHash?: string; challengeToken?: string;
+      const { messageHash, challengeToken } = req.body as {
+        messageHash?: string; challengeToken?: string;
       };
-
-      if (!signature || !/^[0-9a-fA-F]+$/.test(signature)) {
-        res.status(400).json({ error: 'invalid ML-DSA signature hex' });
-        return;
-      }
 
       // Prevent double-broadcast
       if (messageHash) {
@@ -391,101 +437,100 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
         broadcastResults.set(messageHash, { _ts: Date.now() });
       }
 
-      // Build sig-by-hash map
+      if (!challengeToken) {
+        res.status(400).json({ error: 'challengeToken is required for FROST broadcast' });
+        return;
+      }
+
+      const capture = captureCache.get(challengeToken);
+      if (!capture) {
+        res.status(400).json({ error: 'Capture session expired or not found — run sighash again' });
+        return;
+      }
+
+      // Validate FROST signatures
       const sigsByHash = new Map<string, Uint8Array>();
       for (const fs of frostSignatures) {
         if (typeof fs.signature !== 'string' || !/^[0-9a-fA-F]{128}$/.test(fs.signature)) {
+          if (messageHash) broadcastResults.delete(messageHash);
           res.status(400).json({ error: `Invalid FROST signature for hash ${fs.hash?.slice(0, 16)}` });
           return;
         }
         sigsByHash.set(fs.hash, Buffer.from(fs.signature, 'hex'));
       }
 
-      const params = (rawParams ?? []).map((val, i) => {
-        const t = paramTypes?.[i];
-        const s = String(val);
-        if (t === 'address') return Address.wrap(Buffer.from(s.replace(/^0[xX]/, ''), 'hex'));
-        if (t === 'u256') return BigInt(s);
-        return val;
-      });
-
       try {
+        // Replace dummy sigs in template transactions with real FROST sigs
+        const modifiedTxs: string[] = [];
+        for (let txIdx = 0; txIdx < capture.templateTxs.length; txIdx++) {
+          const tx = Transaction.fromHex(capture.templateTxs[txIdx]!);
+
+          // Find all sighashes that belong to this template tx
+          for (const [hashHex, mapping] of capture.sighashMap) {
+            if (mapping.txIndex !== txIdx) continue;
+
+            const frostSig = sigsByHash.get(hashHex);
+            if (!frostSig) {
+              throw new Error(`Missing FROST signature for sighash ${hashHex.slice(0, 16)}...`);
+            }
+
+            const input = tx.ins[mapping.inputIndex];
+            if (!input) {
+              throw new Error(`Template tx ${txIdx} has no input at index ${mapping.inputIndex}`);
+            }
+
+            if (mapping.type === 'script-path') {
+              // Witness: [contractSecret, scriptSignerSig, mainSignerSig(dummy), script, controlBlock]
+              // Replace witness[2] (the dummy main signer sig)
+              if (input.witness.length < 5) {
+                throw new Error(`Unexpected witness length ${input.witness.length} for script-path input ${mapping.inputIndex}`);
+              }
+              input.witness[2] = frostSig;
+            } else {
+              // Key-path witness: [tapKeySig(dummy)]
+              // Replace witness[0]
+              if (input.witness.length < 1) {
+                throw new Error(`Empty witness for key-path input ${mapping.inputIndex}`);
+              }
+              input.witness[0] = frostSig;
+            }
+
+            console.log(`[frost-broadcast] tx${txIdx} input ${mapping.inputIndex} (${mapping.type}): sig replaced`);
+          }
+
+          modifiedTxs.push(tx.toHex());
+        }
+
+        // Broadcast via provider
         const config = store.get();
-        if (!config.wallet || !config.permafrost?.frostAggregateKey || !config.permafrost?.frostUntweakedAggregateKey) {
-          res.status(400).json({ error: 'Wallet or FROST keys not configured' });
-          return;
-        }
-
         const provider = getProvider(config.network);
-        const network = getNetwork(config.network);
-        const contractAbi = resolveAbi(abi);
-        const { wallet, mnemonic } = generateWallet(config.wallet.mnemonic, config.network);
 
-        const vaultAddr = Address.fromString(config.permafrost.combinedPubKey, config.permafrost.frostAggregateKey);
-        const refundAddress = config.permafrost.frostP2tr || config.wallet.p2tr;
-        const contract = getContract(contractAddr, contractAbi as never, provider, network, vaultAddr);
-        const fn = (contract as unknown as Record<string, unknown>)[method];
-        if (typeof fn !== 'function') {
-          mnemonic.zeroize(); wallet.zeroize();
-          res.status(400).json({ error: `Method '${method}' not found` });
-          return;
+        let transactionId: string;
+        if (modifiedTxs.length >= 2) {
+          const pkgResult = await provider.sendRawTransactionPackage(modifiedTxs, true);
+          if (!pkgResult.success) {
+            throw new Error(`Package broadcast failed: ${pkgResult.error || 'unknown'}`);
+          }
+          // Interaction tx is the second in the package [funding, interaction]
+          const interactionResult = pkgResult.sequentialResults?.[1];
+          if (interactionResult && !interactionResult.success) {
+            throw new Error(`Interaction tx failed: ${interactionResult.error || 'unknown'}`);
+          }
+          transactionId = interactionResult?.txid || 'broadcast-ok';
+        } else if (modifiedTxs.length === 1) {
+          const txResult = await provider.sendRawTransaction(modifiedTxs[0]!, false);
+          if (!txResult.success) {
+            throw new Error(`Broadcast failed: ${txResult.error || 'unknown'}`);
+          }
+          transactionId = txResult.result || 'broadcast-ok';
+        } else {
+          throw new Error('No template transactions to broadcast');
         }
 
-        const callResult = await (fn as (...args: unknown[]) => Promise<{
-          revert?: string;
-          sendTransaction: (params: unknown) => Promise<{ transactionId: string; estimatedFees?: bigint }>;
-        }>).call(contract, ...(params ?? []));
+        // Clean up capture cache
+        captureCache.delete(challengeToken);
 
-        if (callResult.revert) {
-          mnemonic.zeroize(); wallet.zeroize();
-          if (messageHash) broadcastResults.delete(messageHash);
-          res.status(400).json({ error: `Simulation reverted: ${callResult.revert}` });
-          return;
-        }
-
-        // Reuse the cached challenge from the sighash endpoint to ensure identical tx build
-        const cached = challengeToken ? challengeCache.get(challengeToken) : undefined;
-        const challenge = cached?.challenge ?? await provider.getChallenge();
-        if (challengeToken) challengeCache.delete(challengeToken);
-        const sigBytes = Buffer.from(signature, 'hex');
-        const pubKeyBytes = Buffer.from(config.permafrost.combinedPubKey, 'hex');
-        const thresholdSigner = new ThresholdMLDSASigner(sigBytes, pubKeyBytes);
-
-        const tweakedPubKey = Buffer.from(config.permafrost.frostAggregateKey, 'hex');
-        const untweakedPubKey = Buffer.from(config.permafrost.frostUntweakedAggregateKey, 'hex');
-        const internalXOnly = toXOnly(untweakedPubKey as never);
-
-        // Replay signer: applies precomputed FROST sigs matched by sighash
-        const replaySigner = FrostPsbtSigner.createReplay(tweakedPubKey, internalXOnly, untweakedPubKey, sigsByHash);
-
-        const hybridSigner = wallet.keypair as typeof wallet.keypair & {
-          multiSignPsbt: typeof replaySigner.multiSignPsbt;
-        };
-        (hybridSigner as unknown as Record<string, unknown>).multiSignPsbt =
-          replaySigner.multiSignPsbt.bind(replaySigner);
-        Object.defineProperty(hybridSigner, 'publicKey', {
-          value: untweakedPubKey,
-          configurable: true,
-        });
-
-        const receipt = await callResult.sendTransaction({
-          signer: hybridSigner as never,
-          mldsaSigner: thresholdSigner,
-          refundTo: refundAddress,
-          network,
-          feeRate: TX_FEE_RATE,
-          priorityFee: TX_PRIORITY_FEE,
-          maximumAllowedSatToSpend: TX_MAX_SAT_SPEND,
-          challenge,
-        });
-
-        mnemonic.zeroize();
-        wallet.zeroize();
-
-        const result = {
-          transactionId: receipt.transactionId,
-          estimatedFees: receipt.estimatedFees?.toString(),
-        };
+        const result = { transactionId };
         if (messageHash) broadcastResults.set(messageHash, { ...result, _ts: Date.now() });
         res.json({ success: true, ...result });
       } catch (e) {

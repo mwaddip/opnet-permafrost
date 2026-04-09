@@ -24,6 +24,18 @@ export interface SighashInfo {
   type: 'script-path' | 'key-path';
 }
 
+/** Per-input sighash captured during a single multiSignPsbt call */
+export interface InputSighash {
+  inputIndex: number;
+  hash: Uint8Array;
+  type: 'script-path' | 'key-path';
+}
+
+/** Tracks sighashes from one multiSignPsbt invocation (= one PSBT/transaction) */
+export interface CapturedCall {
+  sighashes: InputSighash[];
+}
+
 type SchnorrSignFn = (hash: Uint8Array) => Uint8Array | Promise<Uint8Array>;
 
 /** Minimal signer shape for signTaprootInputAsync */
@@ -75,10 +87,14 @@ export class FrostPsbtSigner {
 
   /**
    * Create a capture signer that extracts sighashes from all multiSignPsbt
-   * calls using dummy signatures. The SDK will call multiSignPsbt multiple
-   * times (once per PSBT). Each call accumulates sighashes into a shared
-   * array. The sendTransaction will fail at finalization (dummy sigs) —
-   * the caller catches the error and uses the accumulated sighashes.
+   * calls using dummy signatures. The SDK calls multiSignPsbt multiple
+   * times (fee estimation + final builds). Each call's sighashes are
+   * tracked separately in `calls` so the caller can identify which
+   * correspond to the final funding and interaction transactions.
+   *
+   * Dummy sigs (64 zero bytes) pass through SDK finalization without
+   * verification, so sendTransaction proceeds to broadcast (where the
+   * caller should intercept via provider override).
    */
   static createCapture(
     tweakedPublicKey: Uint8Array,
@@ -87,8 +103,10 @@ export class FrostPsbtSigner {
   ): {
     signer: FrostPsbtSigner;
     sighashes: SighashInfo[];
+    calls: CapturedCall[];
   } {
     const sighashes: SighashInfo[] = [];
+    const calls: CapturedCall[] = [];
     let globalIndex = 0;
 
     const signer = new FrostPsbtSigner(
@@ -99,6 +117,7 @@ export class FrostPsbtSigner {
 
     signer.multiSignPsbt = async (transactions: Psbt[]): Promise<void> => {
       for (const psbt of transactions) {
+        const callSighashes: InputSighash[] = [];
         for (let i = 0; i < psbt.data.inputs.length; i++) {
           const input = psbt.data.inputs[i];
           if (!isTaprootInput(input)) continue;
@@ -121,16 +140,20 @@ export class FrostPsbtSigner {
           };
 
           await psbt.signTaprootInputAsync(i, dummySigner as never);
-          sighashes.push({
-            index: globalIndex++,
+
+          const info: InputSighash = {
+            inputIndex: i,
             hash: capturedHash!,
             type: isScriptPath ? 'script-path' : 'key-path',
-          });
+          };
+          callSighashes.push(info);
+          sighashes.push({ index: globalIndex++, hash: info.hash, type: info.type });
         }
+        calls.push({ sighashes: callSighashes });
       }
     };
 
-    return { signer, sighashes };
+    return { signer, sighashes, calls };
   }
 
   /**

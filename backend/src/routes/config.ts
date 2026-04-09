@@ -177,7 +177,7 @@ export function configRoutes(store: ConfigStore, userStore: UserStore, requireAd
 
   /** POST /api/dkg/save — save DKG ceremony result */
   r.post('/dkg/save', requireAdmin, (req: Request, res: Response) => {
-    const { threshold, parties, level, combinedPubKey, shareData, frostAggregateKey, frostUntweakedAggregateKey } = req.body;
+    const { threshold, parties, level, combinedPubKey, shareData, frostAggregateKey, frostUntweakedAggregateKey, frostLegacySig } = req.body;
     if (typeof threshold !== 'number' || threshold < 1) { res.status(400).json({ error: 'invalid threshold' }); return; }
     if (typeof parties !== 'number' || parties < threshold) { res.status(400).json({ error: 'invalid parties' }); return; }
     if (typeof level !== 'number' || ![44, 65, 87, 128, 192, 256].includes(level)) { res.status(400).json({ error: 'invalid level' }); return; }
@@ -186,12 +186,14 @@ export function configRoutes(store: ConfigStore, userStore: UserStore, requireAd
     const hexRe = /^[0-9a-fA-F]+$/;
     if (frostAggregateKey !== undefined && (typeof frostAggregateKey !== 'string' || !hexRe.test(frostAggregateKey))) { res.status(400).json({ error: 'invalid frostAggregateKey' }); return; }
     if (frostUntweakedAggregateKey !== undefined && (typeof frostUntweakedAggregateKey !== 'string' || !hexRe.test(frostUntweakedAggregateKey))) { res.status(400).json({ error: 'invalid frostUntweakedAggregateKey' }); return; }
+    if (frostLegacySig !== undefined && (typeof frostLegacySig !== 'string' || !hexRe.test(frostLegacySig) || frostLegacySig.length !== 128)) { res.status(400).json({ error: 'invalid frostLegacySig (must be 128 hex chars / 64 bytes)' }); return; }
     try {
       const config = store.get();
       const permafrost: Record<string, unknown> = {
         threshold, parties, level, combinedPubKey, shareData,
         ...(frostAggregateKey ? { frostAggregateKey } : {}),
         ...(frostUntweakedAggregateKey ? { frostUntweakedAggregateKey } : {}),
+        ...(frostLegacySig ? { frostLegacySig } : {}),
       };
 
       const updates: Record<string, unknown> = {
