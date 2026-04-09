@@ -404,6 +404,46 @@ export function ThresholdSign({
     setSession({ ...sessionRef.current });
   }, [currentRound]);
 
+  // Shared restart-from-round-1 logic for auto-retry (leader only, relay mode)
+  const retryAttemptRef = useRef(0);
+  const MAX_RETRY_ATTEMPTS = 50;
+
+  const restartFromRound1 = useCallback((reason: string) => {
+    if (!sessionRef.current || !relayClient || !isLeader) return false;
+    retryAttemptRef.current++;
+    if (retryAttemptRef.current >= MAX_RETRY_ATTEMPTS) {
+      setBlobError(`Signing failed after ${retryAttemptRef.current} attempts. Click Retry to start over.`);
+      setPhase('failed');
+      retryAttemptRef.current = 0;
+      return false;
+    }
+    setBlobError(`${reason} (attempt ${retryAttemptRef.current}/${MAX_RETRY_ATTEMPTS}), retrying...`);
+    const s = sessionRef.current;
+    s.round1State?.destroy();
+    s.round2State?.destroy();
+    s.round1State = null;
+    s.round2State = null;
+    s.myRound1Hash = null;
+    s.myRound2Commitment = null;
+    s.myRound3Response = null;
+    s.collectedRound1Hashes.clear();
+    s.collectedRound2Commitments.clear();
+    s.collectedRound3Responses.clear();
+    s.myRound1Blob = null;
+    s.myRound2Blob = null;
+    s.myRound3Blob = null;
+    blobsSentRef.current = new Set();
+    peerStatesRef.current = new Map();
+    setPhase('round1');
+    round1(s);
+    setSession({ ...s });
+    if (s.myRound1Blob) {
+      void broadcastBlob(s.myRound1Blob);
+      blobsSentRef.current.add(1);
+    }
+    return true;
+  }, [relayClient, isLeader, broadcastBlob]);
+
   // Advance to round 2
   const advanceToRound2 = useCallback(() => {
     if (!sessionRef.current) return;
@@ -418,9 +458,12 @@ export function ThresholdSign({
         blobsSentRef.current.add(2);
       }
     } catch (err) {
-      setBlobError(err instanceof Error ? err.message : 'Round 2 failed');
+      const msg = err instanceof Error ? err.message : 'Round 2 failed';
+      if (!restartFromRound1(msg)) {
+        setBlobError(msg);
+      }
     }
-  }, [relayClient, broadcastBlob]);
+  }, [relayClient, broadcastBlob, restartFromRound1]);
 
   // Advance to round 3
   const advanceToRound3 = useCallback(() => {
@@ -436,9 +479,12 @@ export function ThresholdSign({
         blobsSentRef.current.add(3);
       }
     } catch (err) {
-      setBlobError(err instanceof Error ? err.message : 'Round 3 failed');
+      const msg = err instanceof Error ? err.message : 'Round 3 failed';
+      if (!restartFromRound1(msg)) {
+        setBlobError(msg);
+      }
     }
-  }, [relayClient, broadcastBlob]);
+  }, [relayClient, broadcastBlob, restartFromRound1]);
 
   // Combine — auto-retry in relay mode by restarting from round 1
   const combineAttemptRef = useRef(0);
