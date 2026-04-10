@@ -53,7 +53,7 @@ Blob exchange happens via the built-in encrypted WebSocket relay. All relay mess
 
 After DKG, the signing page shows available operations. If a project manifest is loaded, its operations appear with live contract state and conditional visibility.
 
-## Signing a Transaction
+## Signing a Contract Transaction
 
 1. **Build** — select an operation, fill parameters, encode calldata
 2. **ML-DSA Sign** — each party loads their share file, enters their password, and participates in the 3-round ML-DSA signing protocol. Produces the contract call signature.
@@ -63,6 +63,25 @@ After DKG, the signing page shows available operations. If a project manifest is
 From the user's perspective, steps 2-3 are one continuous flow over the same relay session. The signing protocol auto-retries on ML-DSA norm check failures (up to 50 attempts in relay mode).
 
 For a detailed visual walkthrough, see [Signing Flows](signing-flows.md).
+
+## Sending BTC (Vault Send)
+
+The FROST P2TR address can send BTC directly without any OPNet contract interaction. This uses a FROST-only signing ceremony (no ML-DSA).
+
+**Entry points:**
+- Click the **BTC balance** in the top-right of the signing page
+- Click the **↗ arrow** next to the BTC balance in Settings
+
+**Flow:**
+1. **Prepare** — enter destination address, amount (BTC/mBTC/µBTC/sats), and fee rate (Low/Normal/High). The backend builds a plain Bitcoin P2TR transaction with key-path spend inputs and returns sighashes.
+2. **FROST Sign** — load share files and run the 2-round FROST ceremony. All sighashes are key-path (tweaked), so only Schnorr signing is needed.
+3. **Broadcast** — the initiator's backend injects the FROST signatures into the transaction witnesses and broadcasts. Testnet broadcasts via OPNet provider; mainnet via mempool.space.
+
+**Notes:**
+- Supports any destination address type (P2TR, P2WPKH, P2SH, legacy)
+- Change is sent back to the FROST P2TR address
+- Fee rates are fetched from mempool.space and cached for 60 seconds
+- Double-broadcast is prevented server-side
 
 ## Project Manifests
 

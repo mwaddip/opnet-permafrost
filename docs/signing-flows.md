@@ -203,6 +203,92 @@ OPNet transactions require **two layers of authorization**:
 
 The **key-link** ties them together: a FROST signature over a message binding both public keys, verified by the OPNet VM to confirm that the ML-DSA signer controls the BTC address.
 
+---
+
+## BTC Vault Send
+
+Sends BTC from the FROST P2TR address to any Bitcoin address. FROST-only — no ML-DSA, no OPNet SDK. Simpler and faster than contract signing.
+
+```
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │                       BTC VAULT SEND                               │
+ │                                                                    │
+ │  Leader                   Relay              Joiner(s)             │
+ │  ──────                   ─────              ─────────             │
+ │                                                                    │
+ │  PREPARE TRANSACTION                                               │
+ │  Enter destination addr                                            │
+ │  Enter amount + fee rate                                           │
+ │  Click "Initiate"                                                  │
+ │  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ │
+ │             TX CONSTRUCTION (leader's backend)                     │
+ │  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ │
+ │                                                                    │
+ │  POST /api/btc/prepare                                             │
+ │  ┌──────────────────────────────────────┐                          │
+ │  │ Fetch UTXOs for FROST P2TR address   │                          │
+ │  │ Coin selection (largest first)       │                          │
+ │  │ Build Transaction (key-path only):   │                          │
+ │  │   inputs: selected UTXOs             │                          │
+ │  │   output 1: destination (amount)     │                          │
+ │  │   output 2: change → FROST P2TR     │                          │
+ │  │ Compute sighash per input (0x00)     │                          │
+ │  │ Cache tx + challengeToken (5 min)    │                          │
+ │  └──────────────────────────────────────┘                          │
+ │  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ │
+ │             RELAY SESSION                                          │
+ │  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ │
+ │                                                                    │
+ │  Load share file + pw                    Load share file + pw      │
+ │  Create relay session ──────────────────► Join with code           │
+ │  Broadcast sighashes  ══════════════════► Receive sighashes        │
+ │  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ │
+ │             FROST BTC SIGNING (2 rounds)                           │
+ │  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ │
+ │                                                                    │
+ │  FROST ROUND 1 — Nonces                                           │
+ │  For each sighash:     ◄════════════════► For each sighash:        │
+ │    signRound1() →                           signRound1() →         │
+ │    nonces + commitment                      nonces + commitment    │
+ │  · All inputs are key-path (tweaked: true)                         │
+ │                                                                    │
+ │  FROST ROUND 2 — Partial signatures                                │
+ │  For each sighash:     ◄════════════════► For each sighash:        │
+ │    signRound2() →                           signRound2() →         │
+ │    partial Schnorr sig                      partial Schnorr sig    │
+ │                                                                    │
+ │  FROST AGGREGATE (leader only)                                     │
+ │  For each sighash:                                                 │
+ │    signAggregate() →                                               │
+ │    64-byte Schnorr sig ══════════════════► Receive FROST-COMPLETE  │
+ │  ═══ BIP340 signatures produced ═══                               │
+ │  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ │
+ │             BROADCAST (leader's backend)                           │
+ │  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ │
+ │                                                                    │
+ │  POST /api/btc/broadcast                                           │
+ │  ┌──────────────────────────────────────┐                          │
+ │  │ Retrieve cached tx                   │                          │
+ │  │ Inject FROST sigs as key-path        │                          │
+ │  │   witness = [64-byte Schnorr sig]    │                          │
+ │  │ Broadcast to network                 │                          │
+ │  └──────────────────────────────────────┘                          │
+ │  ═══ Transaction broadcast ═══            See result               │
+ └─────────────────────────────────────────────────────────────────────┘
+```
+
+### Key differences from contract signing
+
+| Aspect | Contract signing | BTC vault send |
+|--------|-----------------|---------------|
+| ML-DSA ceremony | Required (3 rounds) | Skipped |
+| FROST ceremony | 2 rounds | 2 rounds |
+| Input types | Mixed (script-path + key-path) | Key-path only |
+| TX construction | OPNet SDK capture pattern | Direct Transaction build |
+| Broadcast target | OPNet provider | OPNet provider (testnet) / mempool.space (mainnet) |
+
+---
+
 ### Template transaction approach
 
 Rather than having the SDK re-derive transactions (which involves non-deterministic UTXO selection and fee estimation), Ötzi uses a **capture-and-inject** pattern:

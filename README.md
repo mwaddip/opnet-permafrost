@@ -16,7 +16,7 @@ Post-quantum multisig vault for [OPNet](https://opnet.org) Bitcoin L1 smart cont
 4. When complete, each party **downloads their encrypted share file** containing both ML-DSA and FROST key shares, and independently verifies the combined public keys.
 5. The FROST aggregate key becomes the vault's **BTC address** — no separate wallet generation needed. An internal throwaway keypair is auto-generated for SDK protocol-level signatures.
 
-### Signing
+### Contract signing
 
 1. One party builds a transaction (contract, method, parameters) and the vault encodes it into calldata.
 2. Each signing party **loads their share file** and enters their password.
@@ -25,6 +25,17 @@ Post-quantum multisig vault for [OPNet](https://opnet.org) Bitcoin L1 smart cont
 5. One party **broadcasts** the signed transaction to the OPNet network. The server prevents double-broadcast — other parties see the confirmed result.
 
 From the user's perspective, steps 3-4 are one uninterrupted flow over the same relay session.
+
+### BTC vault sends
+
+The FROST P2TR address can send BTC directly — no OPNet contract interaction needed. Click the balance display or the `↗` arrow next to the BTC balance to open the send interface.
+
+1. Enter a **destination address** (any type: P2TR, P2WPKH, P2SH, legacy), **amount** (BTC/mBTC/µBTC/sats), and **fee rate** (Low/Normal/High from mempool estimates).
+2. Click **Initiate** — the backend builds a plain Bitcoin transaction with key-path Taproot inputs and extracts sighashes.
+3. Each signing party loads their share file and runs the **FROST ceremony** (2 rounds) — no ML-DSA needed.
+4. The initiator **broadcasts** the signed transaction.
+
+This is a Schnorr-only flow — simpler and faster than contract signing.
 
 ### Blob exchange
 
@@ -182,16 +193,16 @@ For the full guide, see [`docs/portable-mode.md`](docs/portable-mode.md).
 
 ```
 ├── src/                  # React frontend (Vite)
-│   ├── components/       # DKGWizard, InstallWizard,
-│   │                     # SigningPage, MessageBuilder, ThresholdSign,
-│   │                     # FrostSign, ShareGate, Settings, PasswordModal
+│   ├── components/       # DKGWizard, InstallWizard, SigningPage,
+│   │                     # MessageBuilder, ThresholdSign, FrostSign,
+│   │                     # BtcSend, Settings, PasswordModal
 │   └── lib/              # DKG protocol, threshold signing, FROST signing,
 │                         # relay client, API client, crypto, share serialization
 ├── backend/              # Node.js/Express backend
 │   └── src/
 │       ├── lib/          # ConfigStore, encryption, OPNet client,
 │       │                 # ThresholdMLDSASigner, FrostPsbtSigner
-│       ├── routes/       # config, wallet, tx, balances, hosting
+│       ├── routes/       # config, wallet, tx, btc, balances, hosting
 │       └── server.ts     # Express entry point + WS proxy
 ├── relay/                # Go WebSocket relay server
 │   ├── main.go           # Entry point
