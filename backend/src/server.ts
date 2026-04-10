@@ -12,6 +12,7 @@ import { balanceRoutes } from './routes/balances.js';
 import { hostingRoutes } from './routes/hosting.js';
 import { authRoutes } from './routes/auth.js';
 import { userRoutes, inviteRoutes } from './routes/users.js';
+import { btcRoutes } from './routes/btc.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || '8080', 10);
@@ -43,6 +44,7 @@ app.use('/api/wallet', walletRoutes(store, requireAdmin));
 app.use('/api/tx', txRoutes(store, requireUser, requireAdmin));
 app.use('/api/balances', balanceRoutes(store, requireRead));
 app.use('/api/hosting', hostingRoutes(store, requireAdmin, requireRead));
+app.use('/api/btc', btcRoutes(store, requireUser));
 
 // Relay session count (proxied from relay /sessions endpoint)
 app.get('/api/relay/sessions', async (_req, res) => {
