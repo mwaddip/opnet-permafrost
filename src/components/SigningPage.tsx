@@ -4,7 +4,8 @@ import { ShareImport, ThresholdSign } from './ThresholdSign';
 import { FrostSign } from './FrostSign';
 import { ManifestView } from './ManifestView';
 import { RelayClient } from '../lib/relay';
-import { getConfig, getWalletBalance, broadcastTx, getSighash, broadcastFrost, getBroadcastStatus, getSessionRole, hasAdminToken, getActiveSessions, RELAY_URL } from '../lib/api';
+import { getConfig, getWalletBalance, broadcastTx, getSighash, broadcastFrost, broadcastBtcSend, getBroadcastStatus, getSessionRole, hasAdminToken, getActiveSessions, RELAY_URL } from '../lib/api';
+import { BtcSend, type BtcTxSummary } from './BtcSend';
 import { toHex } from '../lib/threshold';
 import type { VaultConfig } from '../lib/vault-types';
 import type { ManifestConfig } from '../lib/manifest-types';
@@ -40,6 +41,11 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
   const [sighashes, setSighashes] = useState<SighashInfo[] | null>(null);
   const [frostChallengeToken, setFrostChallengeToken] = useState<string | null>(null);
 
+  // BTC vault sub-state
+  const [btcSendMode, setBtcSendMode] = useState(false);
+  const [btcTxSummary, setBtcTxSummary] = useState<BtcTxSummary | null>(null);
+  const [btcChallengeToken, setBtcChallengeToken] = useState<string | null>(null);
+
   // Role: did this party build the message (initiator) or join with a code (joiner)?
   const [isInitiator, setIsInitiator] = useState(false);
 
@@ -69,6 +75,14 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
       setPhase('sign');
     }
   }, [initialSessionCode]);
+
+  // Handle BTC send prefill from Settings
+  useEffect(() => {
+    if (prefill && prefill.type === 'btc') {
+      setBtcSendMode(true);
+      onPrefillConsumed?.();
+    }
+  }, [prefill, onPrefillConsumed]);
 
   // Check for active relay sessions (show/hide session code input)
   const [hasActiveSessions, setHasActiveSessions] = useState(!!initialSessionCode);
@@ -150,6 +164,62 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
     relayClient.on('message', handler);
     return () => { relayClient.off('message', handler); };
   }, [isInitiator, relayClient, share]);
+
+  // BTC vault: once relay is ready, broadcast sighashes and start FROST
+  useEffect(() => {
+    if (!btcChallengeToken || !sighashes || !relayReady || !relayClient || !share?.frostKeyPackage) return;
+    if (frostState !== 'idle') return;
+
+    const payload = 'FROST-SIGHASHES:' + btoa(JSON.stringify(sighashes));
+    void relayClient.broadcast(new TextEncoder().encode(payload));
+    setFrostState('signing');
+  }, [btcChallengeToken, sighashes, relayReady, relayClient, share, frostState]);
+
+  const handleBtcPrepared = useCallback((
+    preparedSighashes: SighashInfo[],
+    challengeToken: string,
+    summary: BtcTxSummary,
+  ) => {
+    setBtcTxSummary(summary);
+    setBtcChallengeToken(challengeToken);
+    setSighashes(preparedSighashes);
+    setBtcSendMode(false);
+    setIsInitiator(true);
+    setPhase('sign');
+  }, []);
+
+  const handleBtcFrostComplete = useCallback(async (sigs: FrostSignatureSet) => {
+    if (!isInitiator || !btcChallengeToken || !sighashes) {
+      // Joiner: go to result
+      setRelayClient(null);
+      relayClientRef.current?.close();
+      relayClientRef.current = null;
+      setPhase('result');
+      return;
+    }
+
+    setFrostState('broadcasting');
+    try {
+      const frostSigs = sigs.signatures.map((s, i) => ({
+        index: sighashes[i]!.index,
+        signature: s.signature,
+      }));
+
+      const result = await broadcastBtcSend({
+        challengeToken: btcChallengeToken,
+        frostSignatures: frostSigs,
+      });
+      setTxResult({ transactionId: result.txid, alreadyBroadcast: result.alreadyBroadcast });
+    } catch (e) {
+      setTxResult({ error: (e as Error).message });
+    }
+
+    setRelayClient(null);
+    relayClientRef.current?.close();
+    relayClientRef.current = null;
+    setFrostState('idle');
+    setPhase('result');
+  }, [isInitiator, btcChallengeToken, sighashes]);
 
   const handleMessageBuilt = useCallback((msg: Uint8Array, meta: MessageMeta) => {
     setMessage(msg);
@@ -309,6 +379,9 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
     setFrostState('idle');
     setSighashes(null);
     setFrostChallengeToken(null);
+    setBtcSendMode(false);
+    setBtcTxSummary(null);
+    setBtcChallengeToken(null);
   };
 
   // ── Relay: Create Session ──
@@ -409,7 +482,11 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {balance !== null && (
-            <div style={{ fontSize: 13, color: 'var(--white-dim)' }}>
+            <div
+              style={{ fontSize: 13, color: 'var(--white-dim)', cursor: phase === 'build' ? 'pointer' : undefined }}
+              onClick={() => { if (phase === 'build') setBtcSendMode(true); }}
+              title={phase === 'build' ? 'Send BTC' : undefined}
+            >
               {(parseInt(balance) / 1e8).toFixed(8)} BTC
             </div>
           )}
@@ -426,59 +503,67 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
 
       {/* Build phase */}
       {phase === 'build' && (
-        <>
-          {/* Session code join — only when relay has active sessions */}
-          {hasActiveSessions && (
-            <div className="card" style={{ marginBottom: 16 }}>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input
-                  autoFocus
-                  value={pendingJoinCode}
-                  onChange={e => {
-                    const val = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-                    setPendingJoinCode(val);
-                    if (val.length >= 6) {
-                      setIsInitiator(false);
-                      setPhase('sign');
-                    }
-                  }}
-                  placeholder="Paste session code to join"
-                  maxLength={6}
-                  style={{ flex: 1, letterSpacing: '0.15em', fontSize: 18, textAlign: 'center', textTransform: 'uppercase', fontFamily: 'monospace' }}
-                  onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
-                />
-              </div>
-            </div>
-          )}
-
-          {config.manifestConfig && (config.manifestConfig as ManifestConfig).addresses &&
-            Object.values((config.manifestConfig as ManifestConfig).addresses).some(a => a) && (
-            <ManifestView
-              config={config.manifestConfig as ManifestConfig}
-              isAdmin={config.authMode === 'wallet' ? getSessionRole() === 'admin' : hasAdminToken()}
-              onExecute={(contractAddr, method, params, paramTypes, messageHash, msgBytes, abi) => {
-                setMessageMeta({
-                  contractAddress: contractAddr,
-                  method,
-                  params: Object.fromEntries(params.map((v, i) => [`p${i}`, v])),
-                  paramTypes,
-                  messageHash,
-                  abi,
-                });
-                setMessage(msgBytes);
-                setIsInitiator(true);
-                setPhase('sign');
-              }}
-            />
-          )}
-
-          <MessageBuilder
-            contracts={config.contracts}
-            onMessageBuilt={handleMessageBuilt}
-            prefill={prefill}
-            onPrefillConsumed={onPrefillConsumed}
+        btcSendMode ? (
+          <BtcSend
+            balance={balance}
+            onPrepared={handleBtcPrepared}
+            onCancel={() => setBtcSendMode(false)}
           />
-        </>
+        ) : (
+          <>
+            {/* Session code join — only when relay has active sessions */}
+            {hasActiveSessions && (
+              <div className="card" style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    autoFocus
+                    value={pendingJoinCode}
+                    onChange={e => {
+                      const val = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                      setPendingJoinCode(val);
+                      if (val.length >= 6) {
+                        setIsInitiator(false);
+                        setPhase('sign');
+                      }
+                    }}
+                    placeholder="Paste session code to join"
+                    maxLength={6}
+                    style={{ flex: 1, letterSpacing: '0.15em', fontSize: 18, textAlign: 'center', textTransform: 'uppercase', fontFamily: 'monospace' }}
+                    onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
+                  />
+                </div>
+              </div>
+            )}
+
+            {config.manifestConfig && (config.manifestConfig as ManifestConfig).addresses &&
+              Object.values((config.manifestConfig as ManifestConfig).addresses).some(a => a) && (
+              <ManifestView
+                config={config.manifestConfig as ManifestConfig}
+                isAdmin={config.authMode === 'wallet' ? getSessionRole() === 'admin' : hasAdminToken()}
+                onExecute={(contractAddr, method, params, paramTypes, messageHash, msgBytes, abi) => {
+                  setMessageMeta({
+                    contractAddress: contractAddr,
+                    method,
+                    params: Object.fromEntries(params.map((v, i) => [`p${i}`, v])),
+                    paramTypes,
+                    messageHash,
+                    abi,
+                  });
+                  setMessage(msgBytes);
+                  setIsInitiator(true);
+                  setPhase('sign');
+                }}
+              />
+            )}
+
+            <MessageBuilder
+              contracts={config.contracts}
+              onMessageBuilt={handleMessageBuilt}
+              prefill={prefill}
+              onPrefillConsumed={onPrefillConsumed}
+            />
+          </>
+        )
       )}
 
       {/* Sign phase */}
@@ -494,6 +579,17 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--white-dim)', marginTop: 4 }}>
                   Message hash: <span style={{ fontFamily: 'monospace', color: 'var(--accent)' }}>{messageMeta.messageHash.slice(0, 16)}...</span>
+                </div>
+              </>
+            ) : btcTxSummary ? (
+              <>
+                <h2>Sending BTC</h2>
+                <div style={{ fontSize: 13, color: 'var(--white-dim)' }}>
+                  To: <span style={{ fontFamily: 'monospace' }}>{btcTxSummary.to}</span>
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--white-dim)', marginTop: 4 }}>
+                  Amount: <span style={{ color: 'var(--accent)' }}>{(btcTxSummary.amount / 1e8).toFixed(8)} BTC</span>
+                  {' '}(fee: {btcTxSummary.fee.toLocaleString()} sats)
                 </div>
               </>
             ) : (
@@ -622,8 +718,8 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
             </div>
           )}
 
-          {/* Step 3: Threshold signing (after relay is ready AND message is available) */}
-          {share && relayReady && relayClient && message && messageMeta && frostState === 'idle' && (
+          {/* Step 3: Threshold signing (after relay is ready AND message is available — skip for BTC vault) */}
+          {share && relayReady && relayClient && message && messageMeta && frostState === 'idle' && !btcChallengeToken && (
             <ThresholdSign
               stepTitle={`Sign: ${messageMeta.method}`}
               targetContract={messageMeta.contractAddress}
@@ -647,7 +743,7 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
               frostPublicKey={share.frostPublicKey!}
               threshold={share.threshold}
               partyId={share.partyId}
-              onSignaturesReady={handleFrostSignaturesReady}
+              onSignaturesReady={btcChallengeToken ? handleBtcFrostComplete : handleFrostSignaturesReady}
               onCancel={handleReset}
               relayClient={relayClient}
               relayReady={relayReady}
@@ -676,8 +772,30 @@ export function SigningPage({ onSettings, prefill, onPrefillConsumed, initialSes
         </>
       )}
 
-      {/* Result phase */}
-      {phase === 'result' && signature && messageMeta && (
+      {/* Result phase — BTC vault send */}
+      {phase === 'result' && btcTxSummary && (
+        <div className="card">
+          <h2>BTC Send {txResult?.transactionId ? 'Complete' : 'Result'}</h2>
+          <div style={{ fontSize: 13, color: 'var(--white-dim)', marginBottom: 12 }}>
+            Sent {(btcTxSummary.amount / 1e8).toFixed(8)} BTC to <span style={{ fontFamily: 'monospace' }}>{btcTxSummary.to}</span>
+          </div>
+
+          {txResult && (
+            <div className={txResult.transactionId ? 'success-box' : 'warning'}>
+              {txResult.transactionId
+                ? `${txResult.alreadyBroadcast ? 'Already broadcast' : 'Transaction broadcast'}: ${txResult.transactionId}`
+                : `Broadcast failed: ${txResult.error}`}
+            </div>
+          )}
+
+          <button className="btn btn-secondary btn-full" style={{ marginTop: 12 }} onClick={handleReset}>
+            New Transaction
+          </button>
+        </div>
+      )}
+
+      {/* Result phase — contract signing */}
+      {phase === 'result' && !btcTxSummary && signature && messageMeta && (
         <div className="card">
           <h2>Signature Ready</h2>
           <div className="success-box">Threshold signing complete</div>
