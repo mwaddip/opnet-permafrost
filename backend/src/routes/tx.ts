@@ -362,7 +362,6 @@ export function txRoutes(store: ConfigStore, requireUser: RequestHandler, requir
           const frostLegacySigBytes = Buffer.from(frostLegacySigHex, 'hex');
           await withFrostLegacySig(
             keyLinkHash, frostLegacySigBytes, tweakedPubKey,
-            hybridSigner as unknown as { tweak?: (...args: unknown[]) => unknown },
             () => callResult.sendTransaction(sendTxParams),
           );
         } else {

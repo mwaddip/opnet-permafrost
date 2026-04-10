@@ -1451,7 +1451,7 @@ export function DKGWizard({ onComplete, initialSessionCode }: DKGWizardProps = {
       dispatch({ type: 'SET_ERROR', error: `Encryption failed: ${e instanceof Error ? e.message : String(e)}` });
       setShowPasswordModal(false);
     }
-  }, [state.share, state.publicKey, state.frostKeyPackage, state.frostPublicKeyPackage, state.level, state.threshold, state.parties, onComplete]);
+  }, [state.share, state.publicKey, state.frostKeyPackage, state.frostPublicKeyPackage, state.level, state.threshold, state.parties, state.frostLinkSig, onComplete]);
 
   // ── Render ──
 

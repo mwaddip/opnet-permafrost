@@ -3,12 +3,14 @@ import { getEccLib, toXOnly } from '@btc-vision/bitcoin';
 import { BinaryWriter } from '@btc-vision/transaction';
 import type { NetworkName } from './types.js';
 
-// From @btc-vision/transaction/src/chain/ChainData.ts
+// sha256("OP_NET") — must match OPNetConsensus.consensus.PROTOCOL_ID
 const BITCOIN_PROTOCOL_ID = new Uint8Array([
   0xe7, 0x84, 0x99, 0x5a, 0x41, 0x2d, 0x77, 0x39, 0x88, 0xc4, 0xb8, 0xe3, 0x33, 0xd7, 0xb3, 0x9d,
   0xfb, 0x3c, 0xab, 0xf1, 0x18, 0xd0, 0xd6, 0x45, 0x41, 0x1a, 0x91, 0x6c, 0xa2, 0x40, 0x79, 0x39,
 ]);
 
+// Chain IDs must match getChainId(getNetwork(name)) from @btc-vision/transaction.
+// 'testnet' maps to networks.opnetTestnet (bech32: "opt"), NOT networks.testnet (bech32: "tb").
 const CHAIN_IDS: Record<string, Uint8Array> = {
   mainnet: new Uint8Array([
     0x00, 0x00, 0x00, 0x00, 0x00, 0x19, 0xd6, 0x68, 0x9c, 0x08, 0x5a, 0xe1, 0x65, 0x83,
@@ -16,9 +18,9 @@ const CHAIN_IDS: Record<string, Uint8Array> = {
     0x0a, 0x8c, 0xe2, 0x6f,
   ]),
   testnet: new Uint8Array([
-    0x00, 0x00, 0x00, 0x00, 0x09, 0x33, 0xea, 0x01, 0xad, 0x0e, 0xe9, 0x84, 0x20, 0x97,
-    0x79, 0xba, 0xae, 0xc3, 0xce, 0xd9, 0x0f, 0xa3, 0xf4, 0x08, 0x71, 0x95, 0x26, 0xf8,
-    0xd7, 0x7f, 0x49, 0x43,
+    0x00, 0x00, 0x01, 0x7f, 0x85, 0x10, 0x6b, 0x1f, 0xee, 0xaf, 0x2f, 0x70, 0xf1, 0xe2,
+    0xb8, 0x05, 0x98, 0x5b, 0xb5, 0x75, 0xf8, 0x8f, 0x9b, 0x0b, 0xa5, 0x75, 0x3d, 0x2f,
+    0x3c, 0xf1, 0x32, 0x73,
   ]),
 };
 
@@ -58,14 +60,13 @@ export function computeKeyLinkHash(
  * pre-computed key-link hash, the stored FROST legacy signature is
  * returned instead of signing with the (wrong) wallet private key.
  *
- * Also patches `hybridSigner.tweak()` so the SDK's tweaked signer gets
+ * Also patches `TweakedSigner.tweakSigner` so the SDK's tweaked signer gets
  * the correct FROST public key (not derived from the wallet's private key).
  */
 export async function withFrostLegacySig<T>(
   keyLinkHash: Uint8Array,
   frostLegacySig: Uint8Array,
   frostTweakedKey: Uint8Array,   // 33 bytes SEC1
-  hybridSigner: { tweak?: (...args: unknown[]) => unknown },
   fn: () => T | Promise<T>,
 ): Promise<T> {
   const ecc = getEccLib();
@@ -79,30 +80,25 @@ export async function withFrostLegacySig<T>(
     return origSignSchnorr(hash as never, privateKey as never);
   };
 
-  // 2. Override tweak() to fix the tweaked signer's publicKey
-  const origTweak = hybridSigner.tweak;
-  if (origTweak) {
-    hybridSigner.tweak = (...args: unknown[]) => {
-      const tweaked = (origTweak as (...a: unknown[]) => Record<string, unknown>).apply(hybridSigner, args);
-      Object.defineProperty(tweaked, 'publicKey', {
-        value: frostTweakedKey,
-        configurable: true,
-      });
-      // Ensure privateKey is truthy (MessageSigner.signMessage checks it)
-      if (!tweaked.privateKey) {
-        Object.defineProperty(tweaked, 'privateKey', {
-          value: new Uint8Array(32),
-          configurable: true,
-        });
-      }
-      return tweaked;
-    };
-  }
+  // 2. Override TweakedSigner.tweakSigner so the SDK's getTweakedSigner()
+  //    produces a signer with the correct FROST public key.
+  //    The SDK calls the static method directly (not signer.tweak()), so
+  //    patching the instance method has no effect.
+  const { TweakedSigner } = await import('@btc-vision/transaction');
+  const origTweakSigner = TweakedSigner.tweakSigner;
+  (TweakedSigner as unknown as Record<string, unknown>).tweakSigner = (signer: unknown, opts?: unknown): unknown => {
+    const result = origTweakSigner(signer as never, opts as never);
+    Object.defineProperty(result, 'publicKey', {
+      value: frostTweakedKey,
+      configurable: true,
+    });
+    return result;
+  };
 
   try {
     return await fn();
   } finally {
     (ecc as unknown as Record<string, unknown>).signSchnorr = origSignSchnorr;
-    if (origTweak) hybridSigner.tweak = origTweak;
+    TweakedSigner.tweakSigner = origTweakSigner;
   }
 }
