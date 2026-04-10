@@ -1,4 +1,4 @@
-# PERMAFROST Vault — Interface Contracts
+# Ötzi — Interface Contracts
 
 An inventory of the system's interfaces and contracts, documented according to
 Bertrand Meyer's **Design by Contract** philosophy: every module supplier
@@ -413,7 +413,7 @@ E2E encrypted WebSocket relay for multi-party ceremony coordination.
 | Aspect | Contract |
 |---|---|
 | **Precondition** | None. |
-| **Postcondition** | Returns `{ state: 'fresh' }` if not initialized, `{ state: 'locked' }` if encrypted but not unlocked, `{ state: 'ready', setupState, storageMode, network, walletConfigured }` if loaded. Never fails. |
+| **Postcondition** | Returns `{ state: 'fresh' }` if not initialized, `{ state: 'locked' }` if encrypted but not unlocked, `{ state: 'ready', setupState, storageMode, network, authMode }` if loaded. Never fails. |
 
 ### `POST /api/init`
 
@@ -466,8 +466,8 @@ E2E encrypted WebSocket relay for multi-party ceremony coordination.
 
 | Aspect | Contract |
 |---|---|
-| **Precondition** | Config loaded. `body` contains `threshold`, `parties`, `level`, `combinedPubKey`, `shareData`. |
-| **Postcondition** | `config.permafrost` set. `config.setupState.dkgComplete = true`. Persisted. |
+| **Precondition** | Config loaded. `body` contains `threshold`, `parties`, `level`, `combinedPubKey`, `shareData`. Optional FROST fields: `frostAggregateKey` (hex), `frostUntweakedAggregateKey` (hex), `frostLegacySig` (128-char hex). |
+| **Postcondition** | `config.permafrost` set with all provided fields. `config.setupState.dkgComplete = true`. If FROST keys present: `frostP2tr` derived from untweaked aggregate key. If `config.wallet` is absent: a throwaway BTC keypair is auto-generated for SDK protocol-level signatures. Persisted. |
 
 ### `POST /api/reset`
 
@@ -483,26 +483,14 @@ E2E encrypted WebSocket relay for multi-party ceremony coordination.
 
 **Module:** `backend/src/routes/wallet.ts`
 
-### `POST /api/wallet/generate`
-
-| Aspect | Contract |
-|---|---|
-| **Precondition** | Config loaded. |
-| **Postcondition** | BIP39 mnemonic generated. Wallet derived for `config.network`. Config updated with wallet fields (mnemonic, p2tr, tweakedPubKey, publicKey). `walletSkipped = false`. Mnemonic returned ONE TIME in response for backup display. Sensitive material (mnemonic object, wallet keypair) zeroized after use. |
-
-### `POST /api/wallet/skip`
-
-| Aspect | Contract |
-|---|---|
-| **Precondition** | Config loaded. |
-| **Postcondition** | `setupState.walletSkipped = true`. `walletDontShowAgain` set per request body. |
+The wallet is auto-generated during DKG save (see `POST /api/dkg/save`). There is no manual wallet generation step.
 
 ### `GET /api/wallet/balance`
 
 | Aspect | Contract |
 |---|---|
 | **Precondition** | Config loaded. |
-| **Postcondition** | If no wallet configured: returns `{ balance: 0, configured: false }`. If wallet exists: queries OPNet provider for BTC balance at `wallet.p2tr` address. Returns `{ balance: '<satoshis>', configured: true }`. |
+| **Postcondition** | If no wallet configured: returns `{ balance: 0, configured: false }`. If wallet exists: queries OPNet provider for BTC balance at `frostP2tr` (preferred) or `wallet.p2tr` address. Returns `{ balance: '<satoshis>', configured: true }`. |
 
 ---
 
@@ -541,12 +529,21 @@ E2E encrypted WebSocket relay for multi-party ceremony coordination.
 | **Postcondition** | Returns `{ success: true, estimatedGas?, events? }` on successful simulation, or `{ success: false, revert }` if the contract call reverts. Params are converted: `address` → `Address.wrap(Buffer)`, `u256` → `BigInt`. |
 | **Error** | 400 if method not found on contract. 500 on provider/simulation failure. |
 
+### `POST /api/tx/sighash`
+
+| Aspect | Contract |
+|---|---|
+| **Precondition** | Config loaded. `config.permafrost` exists with FROST keys (`frostAggregateKey`, `frostUntweakedAggregateKey`). `body.signature` is a hex-encoded ML-DSA signature. `body.contract`, `body.method`, `body.params` define the call. |
+| **Postcondition** | Builds a template OPNet transaction with a dummy signer that captures all input sighashes. Template transactions cached server-side keyed by a random `challengeToken`. Returns `{ sighashes: [{index, hash, type}], challengeToken }`. Each sighash has `type: 'script-path'` or `'key-path'` for Taproot signing. |
+| **Error** | 400 if no DKG or missing FROST keys. 500 on transaction build failure. |
+
 ### `POST /api/tx/broadcast`
 
 | Aspect | Contract |
 |---|---|
 | **Precondition** | Config loaded. `config.wallet` exists (mnemonic available). `config.permafrost` exists (DKG completed). `body.signature` is a hex-encoded ML-DSA signature. `body.contract`, `body.method`, `body.params` define the call. If `body.messageHash` provided, must not already be successfully broadcast. |
-| **Postcondition** | Contract method simulated. If simulation passes, transaction is built with the `ThresholdMLDSASigner` adapter, signed with `wallet.keypair`, and broadcast to the OPNet network. Returns `{ success: true, transactionId, estimatedFees }`. Result cached in `broadcastResults`. Sensitive wallet material zeroized after use. |
+| **Postcondition (FROST path)** | If `body.frostSignatures` and `body.challengeToken` present: retrieves cached template transactions, injects FROST Schnorr signatures into witness data (script-path → witness[2], key-path → witness[0]). Injects FROST legacy signature for key-link if configured. Broadcasts final signed transaction(s). Returns `{ success: true, transactionId, estimatedFees }`. |
+| **Postcondition (legacy path)** | If no `frostSignatures`: builds transaction with `ThresholdMLDSASigner` adapter, signs with `wallet.keypair`, and broadcasts. Returns `{ success: true, transactionId, estimatedFees }`. |
 | **Double-broadcast** | If `messageHash` was already broadcast successfully, returns cached result with `alreadyBroadcast: true`. Concurrent requests are blocked by immediate lock-set. |
 | **Error** | 400 if no wallet or no DKG. 400 if simulation reverts. 500 on broadcast failure (lock cleared for retry). |
 
@@ -626,12 +623,12 @@ For every API function:
 |---|---|
 | `NetworkName` | Always `'testnet'` or `'mainnet'`. |
 | `StorageMode` | Always one of `'persistent'`, `'encrypted-persistent'`, `'encrypted-portable'`. |
-| `SetupState` | All four booleans present. `dkgComplete` implies a DKG ceremony has been saved. `walletSkipped` and `walletDontShowAgain` track user's wallet setup decision. |
+| `SetupState` | Two booleans: `wizardComplete` and `dkgComplete`. `dkgComplete` implies a DKG ceremony has been saved and a wallet has been auto-generated. |
 | `WalletConfig` (backend) | Contains `mnemonic` (BIP39). Frontend receives `WalletPublic` (no mnemonic) via `sanitizeConfig()`. |
 | `PermafrostConfig` | `threshold <= parties`. `level` in `{44,65,87,128,192,256}`. `combinedPubKey` is hex-encoded ML-DSA combined public key. `shareData` is the serialized share for this instance. |
 | `ContractConfig` | `address` is a valid OPNet contract address. `abi` is an ABI array. `methods` lists callable method names. |
 | `HostingConfig` | `httpsStatus` is only set when `httpsEnabled === true`. `httpsError` is only set when `httpsStatus === 'error'`. |
-| `VaultConfig` | `version` is always `1`. `contracts` is always an array (possibly empty). `wallet` and `permafrost` are optional — present only after their respective setup steps. |
+| `VaultConfig` | `version` is always `1`. `contracts` is always an array (possibly empty). `wallet` is auto-generated at DKG save (not user-facing). `permafrost` is present after DKG ceremony. |
 
 ### `sanitizeConfig(config): SanitizedConfig`
 
@@ -639,7 +636,7 @@ For every API function:
 |---|---|
 | **Precondition** | `config` is a valid `VaultConfig`. |
 | **Postcondition** | Returns a copy with `wallet.mnemonic` stripped. All other fields preserved. If `wallet` is absent, returned as-is. Never mutates the input. |
-| **Security invariant** | The mnemonic NEVER leaves the backend except during the one-time `POST /api/wallet/generate` response. |
+| **Security invariant** | The mnemonic NEVER leaves the backend. The wallet is auto-generated internally and its mnemonic is never exposed to the frontend. |
 
 ### `defaultConfig(network, storageMode): VaultConfig`
 
@@ -655,9 +652,9 @@ For every API function:
 ### Security Invariants (System-Wide)
 
 1. **Mnemonic confinement:** The BIP39 mnemonic is stored only in
-   `config.wallet.mnemonic` on the backend. It is returned to the frontend
-   exactly once (`POST /wallet/generate`). `sanitizeConfig()` strips it from
-   all other responses. Wallet objects are `zeroize()`d after use.
+   `config.wallet.mnemonic` on the backend. It is auto-generated during DKG
+   save and never exposed to the frontend. `sanitizeConfig()` strips it from
+   all responses. Wallet objects are `zeroize()`d after use.
 
 2. **Share encryption:** Key shares are always encrypted at rest with
    AES-256-GCM (PBKDF2 600k iterations). The password never leaves the user's

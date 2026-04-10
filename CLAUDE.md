@@ -1,6 +1,6 @@
 @~/projects/OVERRIDES.md
 
-# CLAUDE.md — Ötzi (PERMAFROST Vault)
+# CLAUDE.md — Ötzi
 
 ## Project Overview
 
@@ -32,7 +32,7 @@ Frontend (React/Vite)  →  Backend (Express/Node)  →  Relay (Go WebSocket)
 BACKEND_PORT=9080 npm run dev
 
 # Terminal 2: Backend (auto-reload via tsx watch)
-DATA_DIR=/tmp/permafrost-dev PORT=9080 RELAY_PORT=9081 npm run dev:backend
+DATA_DIR=/tmp/otzi-dev PORT=9080 RELAY_PORT=9081 npm run dev:backend
 
 # Terminal 3: Relay (Go — may need PATH adjustment)
 PATH="/usr/local/go/bin:$PATH" npm run dev:relay -- -addr :9081
@@ -43,9 +43,9 @@ Ports 8080/8081 are occupied on dev machine. Use 9080/9081.
 ## Build & Deploy
 
 ```bash
-docker build -t permafrost-vault .           # Docker
+docker build -t otzi .                       # Docker
 ./install.sh --domain vault.example.com      # Linux (with or without sudo)
-sudo dpkg -i permafrost-vault_*.deb          # Debian/Ubuntu
+sudo dpkg -i otzi_*.deb                      # Debian/Ubuntu
 ```
 
 GitHub Actions builds tarball + zip + .deb on tagged releases (`v*`).

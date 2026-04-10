@@ -1,10 +1,10 @@
-# PERMAFROST Vault
+# Ötzi
 
 Post-quantum multisig vault for [OPNet](https://opnet.org) Bitcoin L1 smart contracts.
 
-PERMAFROST Vault is a self-hosted application that combines distributed key generation (DKG), threshold ML-DSA signing, FROST threshold BTC signing, wallet management, and OPNet transaction broadcasting into a single interface. T-of-N parties each produce their own secret shares of both an ML-DSA (post-quantum) signing key and a FROST secp256k1 BTC key — without any single party ever seeing the full secrets.
+Ötzi is a self-hosted application that combines distributed key generation (DKG), threshold ML-DSA signing, FROST threshold BTC signing, and OPNet transaction broadcasting into a single interface. T-of-N parties each produce their own secret shares of both an ML-DSA (post-quantum) signing key and a FROST secp256k1 BTC key — without any single party ever seeing the full secrets.
 
-> **Note:** FROST threshold BTC signing is new and unaudited. The ML-DSA threshold protocol has been in production since v2.0. Use FROST on testnet until it has been reviewed.
+> **Note:** The FROST library ([frots](https://github.com/mwaddip/frots)) is a byte-for-byte validated TypeScript port of the audited ZF `frost-secp256k1-tr` Rust reference. However, the Ötzi integration layer — DKG ceremony wiring, template tx capture, signature injection, and key-link binding — is new and unaudited. Use on testnet until the integration has been reviewed.
 
 ## How it works
 
@@ -12,9 +12,9 @@ PERMAFROST Vault is a self-hosted application that combines distributed key gene
 
 1. **One party creates** a session (choosing T, N, and security level).
 2. **Other parties join** by pasting the session code.
-3. The ceremony runs **eight phases** — four ML-DSA phases (Commit, Reveal, Masks, Aggregate) followed by two FROST phases (FROST Commit, FROST Shares), then finalization.
+3. The ceremony runs **nine steps** — four ML-DSA phases (Commit, Reveal, Masks, Aggregate), two FROST phases (FROST Commit, FROST Shares), a Key-Link signing step, and finalization.
 4. When complete, each party **downloads their encrypted share file** containing both ML-DSA and FROST key shares, and independently verifies the combined public keys.
-5. The FROST aggregate key becomes the vault's **BTC address** — no separate wallet generation needed.
+5. The FROST aggregate key becomes the vault's **BTC address** — no separate wallet generation needed. An internal throwaway keypair is auto-generated for SDK protocol-level signatures.
 
 ### Signing
 
@@ -43,22 +43,22 @@ curl -sL https://github.com/mwaddip/otzi/releases/latest/download/install.sh | b
 
 Downloads the latest release, creates systemd services, and configures
 nginx or apache if detected. Works with or without sudo — without sudo it
-installs to `~/.permafrost/` with user-level services.
+installs to `~/.otzi/` with user-level services.
 
 ### Debian/Ubuntu (.deb)
 
 ```bash
-curl -sLO https://github.com/mwaddip/otzi/releases/latest/download/permafrost-vault_*.deb
-sudo dpkg -i permafrost-vault_*.deb
+curl -sLO https://github.com/mwaddip/otzi/releases/latest/download/otzi_*.deb
+sudo dpkg -i otzi_*.deb
 ```
 
-Installs to `/opt/permafrost/`, creates system user, configures nginx,
+Installs to `/opt/otzi/`, creates system user, configures nginx,
 and prompts for port and domain via debconf.
 
 ### Docker
 
 ```bash
-docker run -d -p 80:80 -p 443:443 -v permafrost-data:/data ghcr.io/mwaddip/otzi:latest
+docker run -d -p 80:80 -p 443:443 -v otzi-data:/data ghcr.io/mwaddip/otzi:latest
 ```
 
 Or with Docker Compose:
@@ -147,8 +147,7 @@ Portable mode is the most paranoid option — keys never touch the server filesy
 **Critical workflow:**
 
 1. Complete the install wizard with **Encrypted Portable** selected.
-2. Generate a wallet (or skip).
-3. Run the DKG ceremony.
+2. Run the DKG ceremony (an internal wallet is auto-generated at completion).
 4. **Download the encrypted config** when the orange banner appears at the top of the page. The banner stays visible on every page until you click it. This file is your only persistent copy of everything.
 5. Store the `.enc` file somewhere safe (multiple copies recommended).
 6. Use the instance normally. After any meaningful change (new contract, manifest update, added user), download a fresh backup from **Settings > Backup**.
@@ -166,7 +165,7 @@ For the full guide, see [`docs/portable-mode.md`](docs/portable-mode.md).
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  PERMAFROST Vault                               │
+│  Ötzi                                            │
 │                                                 │
 │  :80/:443  Web server (nginx/apache/Caddy)      │
 │            └── reverse proxy ──> :8080          │
@@ -178,7 +177,7 @@ For the full guide, see [`docs/portable-mode.md`](docs/portable-mode.md).
 │                                                 │
 │  :8081  Go relay (internal, not exposed)        │
 │                                                 │
-│  /var/lib/permafrost  (or /data in Docker)      │
+│  /var/lib/otzi  (or /data in Docker)             │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -186,7 +185,7 @@ For the full guide, see [`docs/portable-mode.md`](docs/portable-mode.md).
 
 ```
 ├── src/                  # React frontend (Vite)
-│   ├── components/       # DKGWizard, InstallWizard, WalletSetup,
+│   ├── components/       # DKGWizard, InstallWizard,
 │   │                     # SigningPage, MessageBuilder, ThresholdSign,
 │   │                     # FrostSign, ShareGate, Settings, PasswordModal
 │   └── lib/              # DKG protocol, threshold signing, FROST signing,

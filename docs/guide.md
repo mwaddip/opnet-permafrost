@@ -2,25 +2,20 @@
 
 ## What is Ötzi?
 
-Ötzi (PERMAFROST Vault) is a self-hosted operations interface for OPNet Bitcoin L1 smart contracts. It combines:
+Ötzi is a self-hosted operations interface for OPNet Bitcoin L1 smart contracts. It combines:
 
-- **Distributed Key Generation (DKG)** — T-of-N parties each generate a share of a post-quantum ML-DSA signing key without any single party ever seeing the full secret
-- **Threshold Signing** — T parties collaborate to produce a valid signature via a 3-round protocol
+- **Distributed Key Generation (DKG)** — T-of-N parties each generate shares of both a post-quantum ML-DSA signing key and a FROST secp256k1 BTC key, without any single party ever seeing the full secrets
+- **Dual Threshold Signing** — ML-DSA (3-round) for contract authorization + FROST (2-round) for Bitcoin transaction signing
 - **Transaction Broadcasting** — encode calldata, simulate, sign, and broadcast OPNet contract calls
 - **Project Manifests** — any OPNet project can define its operations as a declarative `.otzi.json` file
 
-## Important: The Server Wallet
+## BTC Wallet Architecture
 
-During setup, Ötzi generates a BTC wallet (mnemonic + P2TR address). This wallet exists **solely to pay transaction fees** (gas) when broadcasting signed transactions to the OPNet network.
+Ötzi uses **FROST threshold signing** for the BTC wallet. The vault's BTC address is derived from the FROST aggregate key — no single party holds the private key. All Bitcoin transaction inputs are signed via the 2-round FROST ceremony.
 
-**This is NOT the multisig vault.** The vault's signing key is the ML-DSA key from the DKG ceremony, held as shares by the participating parties. The server wallet is a separate, single-key BTC wallet used only for fee payment.
+An internal throwaway keypair is auto-generated during DKG completion for SDK protocol-level signatures (OPNet SDK internals). This wallet is not user-facing and its mnemonic never leaves the backend.
 
-**Fund this wallet with the minimum amount needed for gas fees.** A few thousand satoshis is typically sufficient. Do not store significant value in this wallet — it is a hot wallet on the server with the mnemonic stored in the instance configuration.
-
-The server wallet's private key (mnemonic) is:
-- Stored encrypted on disk (in `encrypted-persistent` mode) or never stored (in `encrypted-portable` mode)
-- Never sent to the frontend except once during initial generation for backup
-- Used only at broadcast time to sign the BTC transaction envelope (not the contract call — that's the threshold ML-DSA signature)
+**Fund the FROST P2TR address** (shown in Settings) with the amount needed for gas fees. A few thousand satoshis is typically sufficient.
 
 ## Setup Flow
 
@@ -41,19 +36,16 @@ Choose Testnet or Mainnet. This determines which OPNet RPC endpoint the instance
 | **Encrypted Persistent** | AES-256-GCM encrypted on disk | Requires password on each restart |
 | **Encrypted Portable** | Downloaded to your machine | Upload + password each session |
 
-### 4. Wallet Generation
-
-Generates the BTC fee-payment wallet. **Write down the mnemonic** — it is shown only once. Fund the P2TR address with a small amount of BTC for gas fees.
-
-### 5. DKG Ceremony
+### 4. DKG Ceremony
 
 All T-of-N parties must participate simultaneously:
 
 1. **Initiator** creates a session (chooses T, N, security level)
 2. **Other parties** join by pasting the session code or clicking the join link
-3. The ceremony runs 4 phases (Commit → Reveal → Masks → Aggregate)
-4. Each party downloads their encrypted share file
-5. The combined ML-DSA public key is saved to the instance
+3. The ceremony runs 9 steps: ML-DSA phases (Commit → Reveal → Masks → Aggregate), FROST phases (FROST Commit → FROST Shares), Key-Link signing, and finalization
+4. Each party downloads their encrypted share file (V3 format with both ML-DSA and FROST key shares)
+5. The combined ML-DSA public key and FROST BTC address are saved to the instance
+6. An internal wallet is auto-generated for SDK protocol signatures
 
 Blob exchange happens via the built-in encrypted WebSocket relay. All relay messages are E2E encrypted — the relay server only forwards ciphertext.
 
@@ -64,10 +56,13 @@ After DKG, the signing page shows available operations. If a project manifest is
 ## Signing a Transaction
 
 1. **Build** — select an operation, fill parameters, encode calldata
-2. **Sign** — each party loads their share file, enters their password, and participates in the 3-round signing protocol
-3. **Broadcast** — one party broadcasts the signed transaction. Others see the result. Double-broadcast is prevented server-side.
+2. **ML-DSA Sign** — each party loads their share file, enters their password, and participates in the 3-round ML-DSA signing protocol. Produces the contract call signature.
+3. **FROST Sign** — the server captures sighashes from a template transaction, then parties run a 2-round FROST ceremony to produce BIP340 Schnorr signatures for each Bitcoin input.
+4. **Broadcast** — the leader's server injects FROST signatures into the template transaction and broadcasts. Other parties see the result. Double-broadcast is prevented server-side.
 
-Session codes allow parties to coordinate via the relay. The signing protocol auto-retries on norm check failures (up to 50 attempts in relay mode).
+From the user's perspective, steps 2-3 are one continuous flow over the same relay session. The signing protocol auto-retries on ML-DSA norm check failures (up to 50 attempts in relay mode).
+
+For a detailed visual walkthrough, see [Signing Flows](signing-flows.md).
 
 ## Project Manifests
 
@@ -144,10 +139,12 @@ This is metadata for URL building — it does not change which port the server l
 ## Security Model
 
 - **Threshold ML-DSA** — FIPS 204 post-quantum signatures. No single party holds the full signing key.
+- **Threshold FROST** — BIP340 Schnorr signatures via FROST (RFC 9591). The BTC wallet is threshold-controlled — no single party holds the private key.
+- **Key-link binding** — FROST signature over a message binding ML-DSA and BTC keys, verified by the OPNet VM.
 - **Share encryption** — AES-256-GCM with PBKDF2-derived key (600k iterations). Password never leaves the browser.
 - **E2E relay** — ECDH key agreement + AES-256-GCM. Relay server only forwards ciphertext.
 - **Blob integrity** — DKG phase 3 blobs include SHA-256 checksums and polynomial coefficient range validation.
 - **Canonical ordering** — signing rounds enforce deterministic party ordering.
 - **Broadcast locking** — server-side lock prevents double-broadcast.
 - **Challenge-response auth** — ML-DSA signatures with one-time 60-second challenges.
-- **Fee wallet isolation** — the server wallet only pays gas fees. Contract authorization comes from the threshold ML-DSA key.
+- **Template tx approach** — sighashes captured from a template transaction, avoiding non-deterministic SDK rebuilds.
