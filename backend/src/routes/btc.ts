@@ -226,25 +226,15 @@ export function btcRoutes(store: ConfigStore, requireUser: RequestHandler): Rout
 
       const rawTx = tx.toHex();
 
-      // Broadcast via mempool.space
+      // Broadcast via OPNet provider (same chain as UTXO source)
       const config = store.get();
-      const broadcastUrl = MEMPOOL_TX[config.network];
-      if (!broadcastUrl) {
-        throw new Error(`No broadcast endpoint configured for network: ${config.network}`);
+      const provider = getProvider(config.network);
+
+      const txResult = await provider.sendRawTransaction(rawTx, false);
+      if (!txResult.success) {
+        throw new Error(`Broadcast failed: ${txResult.error || 'unknown'}`);
       }
-
-      const resp = await fetch(broadcastUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: rawTx,
-      });
-
-      if (!resp.ok) {
-        const errText = await resp.text();
-        throw new Error(`Broadcast failed: ${errText}`);
-      }
-
-      const txid = (await resp.text()).trim();
+      const txid = txResult.result || tx.getId();
 
       txCache.delete(challengeToken);
       broadcastLock.set(challengeToken, { txid, ts: Date.now() });
