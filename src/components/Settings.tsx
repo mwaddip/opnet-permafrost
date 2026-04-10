@@ -154,7 +154,16 @@ export function Settings({ onBack, onSend }: Props) {
                 </div>
                 <div>
                   <strong style={{ fontSize: 13, color: 'var(--gray-light)' }}>BTC Balance</strong>
-                  <div style={{ fontSize: 16, fontWeight: 600, marginTop: 4 }}>{(parseInt(balance) / 1e8).toFixed(8)} BTC</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                    <span style={{ fontSize: 16, fontWeight: 600 }}>{(parseInt(balance) / 1e8).toFixed(8)} BTC</span>
+                    <button
+                      style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 14, padding: 0, lineHeight: 1 }}
+                      onClick={() => onSend({ type: 'btc' })}
+                      title="Send BTC"
+                    >
+                      ↗
+                    </button>
+                  </div>
                 </div>
               </>
             ) : (
