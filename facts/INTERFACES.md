@@ -19,6 +19,8 @@ and what must always hold (invariants).
 8. [REST API — Config Routes](#8-rest-api--config-routes)
 9. [REST API — Wallet Routes](#9-rest-api--wallet-routes)
 10. [REST API — Transaction Routes](#10-rest-api--transaction-routes)
+10a. [FROST Signing Protocol](#10a-frost-signing-protocol)
+10b. [REST API — BTC Vault Routes](#10b-rest-api--btc-vault-routes)
 11. [REST API — Balance Routes](#11-rest-api--balance-routes)
 12. [REST API — Hosting Routes](#12-rest-api--hosting-routes)
 13. [Frontend API Client (api.ts)](#13-frontend-api-client)
@@ -203,7 +205,8 @@ between parties (copy-paste or relay).
 | `encodePhase2Private(priv, target, sid)` | `p2priv` | Each bitmask reveal is 32 bytes. | `to = targetPartyId` (private message). |
 | `encodePhase3Private(priv, target, sid)` | `p3priv` | Each polynomial has 256 `Int32` coefficients. | Appends SHA-256 checksum (32 bytes) for integrity. `to = targetPartyId`. |
 | `decodePhase3Private(blob)` | `p3priv` | Blob is valid and `>= 32` bytes of data. | Verifies SHA-256 checksum. Validates all coefficients in `[0, Q)` where `Q = 8380417`. Returns `null` on integrity failure or out-of-range coefficients. |
-| `encodePhase4Broadcast(broadcast, sid)` | `p4` | `broadcast.aggregate` is an array of `Int32Array[256]`. | Binary layout: `1B partyId + 1B numPolys + polys`. `to = -1`. |
+| `encodePhase4Broadcast(broadcast, sid)` | `p4` | `broadcast.aggregate` is an array of `Int32Array[256]`. | Binary layout: `1B partyId + 1B numPolys + polys + 32B SHA-256 checksum`. `to = -1`. |
+| `decodePhase4Broadcast(blob)` | `p4` | Blob is valid and `>= 32` bytes of data. | Verifies SHA-256 checksum. Returns `null` on integrity failure. |
 
 ### `identifyBlob(blob): BlobInfo | null`
 
@@ -335,7 +338,7 @@ expected by the OPNet SDK's `sendTransaction()`.
 | Aspect | Contract |
 |---|---|
 | **Precondition** | None. |
-| **Postcondition** | Always returns `true`. Not used during `sendTransaction()` flow. |
+| **Postcondition** | Always throws `Error('not implemented')`. Not used during `sendTransaction()` flow. If the OPNet SDK ever calls this, the error surfaces immediately rather than silently accepting invalid signatures. |
 
 ---
 
@@ -549,6 +552,79 @@ The wallet is auto-generated during DKG save (see `POST /api/dkg/save`). There i
 
 ---
 
+## 10a. FROST Signing Protocol
+
+**Module:** `src/lib/frost-sign.ts` (codec), `src/components/FrostSign.tsx` (UI)
+
+Implements a 2-round FROST (RFC 9591, secp256k1-SHA256-TR) threshold signing
+protocol for BIP340 Schnorr signatures. Operates over one or more sighashes
+(batched in a single round).
+
+### Types
+
+| Type | Description |
+|---|---|
+| `SighashInfo` | `{ index: number, hash: string (hex 32B), type: 'script-path' \| 'key-path' }` |
+| `FrostSignatureSet` | `{ signatures: Array<{ index: number, signature: string (hex 64B) }> }` |
+
+### Blob Protocol
+
+| Function | Type | Layout |
+|---|---|---|
+| `encodeFrostSignR1(partyId, commitments, sessionId)` | `frost-sign-r1` | `1B partyId + 1B count + N × (2B identifier LE + 33B hiding + 33B binding)` |
+| `encodeFrostSignR2(partyId, shares, sessionId)` | `frost-sign-r2` | `1B partyId + 1B count + N × (2B identifier LE + 32B share bigint BE)` |
+
+### FrostSign Component Contract
+
+| Aspect | Contract |
+|---|---|
+| **Props** | `sighashes: SighashInfo[]`, `frostKeyPackage: KeyPackage`, `frostPublicKey: string` (33B SEC1 hex), `threshold`, `partyId`, `isLeader`, `relayClient`, `relayReady`, `onSignaturesReady: (sigs) => void`, `onCancel` |
+| **Round 1** | For each sighash: `signRound1(keyPackage, rng)` → nonces + commitments. Broadcast R1 blob. Collect until `count >= threshold`. |
+| **Round 2** | For each sighash: `signRound2(keyPackage, nonces, sighash, allCommitments, { tweaked })`. `tweaked = (type === 'key-path')`. Broadcast R2 blob. |
+| **Aggregate** (leader only) | For each sighash: `signAggregate(allShares, sighash, allCommitments, pubKeyPkg, { tweaked })`. Broadcasts `FROST-COMPLETE:` + JSON. Calls `onSignaturesReady`. |
+| **Joiner** | Receives `FROST-COMPLETE:` from leader → calls `onSignaturesReady` directly. |
+| **State sync** | `FROST-STATE:{partyId}:{round}:{sentBlobNums}` broadcast every 500ms. Leader auto-advances; joiner follows leader's state. |
+
+---
+
+## 10b. REST API — BTC Vault Routes
+
+**Module:** `backend/src/routes/btc.ts`
+
+Plain Bitcoin P2TR transaction construction and broadcast. No OPNet SDK involvement. All inputs are key-path Taproot spends.
+
+### Module Invariants
+
+- `txCache: Map<string, CachedBtcTx>` holds unsigned transactions keyed by `challengeToken`, 5-min TTL.
+- `broadcastLock: Map<string, { txid?, error?, ts }>` prevents double-broadcast, 1-hour TTL.
+- All sighashes are `SIGHASH_DEFAULT (0x00)`, key-path only.
+
+### `POST /api/btc/prepare`
+
+| Aspect | Contract |
+|---|---|
+| **Precondition** | Config loaded. FROST keys configured (`frostP2tr`, `frostUntweakedAggregateKey`). `body.to` is a valid Bitcoin address for the configured network. `body.amount` is a positive integer (satoshis). `body.feeRate` is a positive number (sat/vB). |
+| **Postcondition** | Fetches UTXOs via `provider.utxoManager.getUTXOs()`. Coin selection: greedy, largest first. Builds `Transaction` directly (not Psbt). Destination output + change output (if > 546 sats) back to frostP2tr. Computes `hashForWitnessV1()` per input. Caches tx + sighashes under random `challengeToken` (5-min TTL). Returns `{ sighashes: [{index, hash, type: 'key-path'}], challengeToken, estimatedFee, changeAmount }`. |
+| **Error** | 400 if invalid address, amount, feeRate, or insufficient funds. 400 if no FROST keys. |
+
+### `POST /api/btc/broadcast`
+
+| Aspect | Contract |
+|---|---|
+| **Precondition** | `body.challengeToken` exists in cache. `body.frostSignatures` is an array of `{ index, signature }` matching the cached input count. Each signature is 128 hex chars (64 bytes). |
+| **Postcondition** | Verifies each FROST signature via `schnorr.verify(sig, sighash, xOnlyPub)` before injection. Injects signatures as key-path witness `[64B sig]`. Broadcasts: OPNet provider for testnet, mempool.space for mainnet. Returns `{ txid }`. Cleans up cache. |
+| **Double-broadcast** | Returns cached `{ txid, alreadyBroadcast: true }` if already broadcast. |
+| **Error** | 400 if token expired/missing, signature count mismatch, invalid signature format, or BIP340 verification failure. 500 on broadcast failure (lock cleared for retry). |
+
+### `GET /api/btc/fees`
+
+| Aspect | Contract |
+|---|---|
+| **Precondition** | Config loaded (to determine network). |
+| **Postcondition** | Returns `{ low, normal, high }` in sat/vB. Fetched from mempool.space API (`hourFee`, `halfHourFee`, `fastestFee`). Cached for 60 seconds. On fetch failure: returns fallback `{ low: 1, normal: 5, high: 10, fallback: true }`. |
+
+---
+
 ## 11. REST API — Balance Routes
 
 **Module:** `backend/src/routes/balances.ts`
@@ -664,9 +740,9 @@ For every API function:
    AES keys derived from ECDH key agreement. The relay server never sees
    plaintext ceremony data.
 
-4. **Phase 3 integrity:** DKG phase 3 blobs include a SHA-256 checksum and
-   polynomial coefficient range validation (`[0, Q)`). Corrupted blobs are
-   rejected at decode time, not during ceremony computation.
+4. **Phase 3+4 integrity:** DKG phase 3 and phase 4 blobs include SHA-256
+   checksums. Phase 3 additionally validates polynomial coefficient ranges
+   (`[0, Q)`). Corrupted blobs are rejected at decode time.
 
 5. **Broadcast idempotency:** Transaction broadcast is locked server-side on
    `messageHash`. Only one party can successfully broadcast; others receive the
@@ -676,6 +752,14 @@ For every API function:
    sort party IDs ascending before passing data to the cryptographic library.
    This ensures all parties compute identical inputs regardless of collection
    order.
+
+7. **BIP340 pre-broadcast verification:** Both `/api/tx/broadcast` (contract
+   signing) and `/api/btc/broadcast` (BTC vault) verify every FROST Schnorr
+   signature via `schnorr.verify()` from `@noble/curves` before injecting
+   into the transaction. Catches ceremony failures before wasting a broadcast.
+
+8. **Backend config encryption:** PBKDF2 with 600K iterations (SHA-256),
+   matching the frontend share file encryption strength.
 
 ### State Machine (Vault Lifecycle)
 
